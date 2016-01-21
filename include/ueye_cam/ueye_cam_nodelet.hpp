@@ -167,13 +167,6 @@ protected:
   void frameGrabLoop();
   void startFrameGrabber();
   void stopFrameGrabber();
-  
-   /**
-   * Secondary thread which publishes timestamped image frames.
-   */
-  void framePublishLoop();
-  void startFramePublisher();
-  void stopFramePublisher();
 
   /**
    * Returns image's timestamp or current wall time if driver call fails.
@@ -182,13 +175,10 @@ protected:
   
   // XXX descr
   unsigned int stampAndPublishImage(unsigned int index);
-  unsigned int findInImgBuffer(unsigned int index);
+  unsigned int findInStampBuffer(unsigned int index);
 
   std::thread frame_grab_thread_;
   bool frame_grab_alive_;
-  
-  std::thread frame_pub_thread_;
-  bool frame_pub_alive_;
 
   ReconfigureServer* ros_cfg_;
   boost::recursive_mutex ros_cfg_mutex_;
