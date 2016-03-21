@@ -30,8 +30,11 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   camera_calibration_parsers
   camera_info_manager
+  message_generation
   )
 catkin_destinations() # define ${CATKIN_PACKAGE_SHARE_DESTINATION}
+
+find_package(OpenCV REQUIRED)
 
 #set(UEYE_LIBRARY_PATH /usr/lib)
 find_library(UEYE_LIBRARY ueye_api)
@@ -73,6 +76,13 @@ set(UEYECAM_NODELET_HEADERS
   include/ueye_cam/ueye_cam_nodelet.hpp
 )
 
+add_message_files(DIRECTORY msg
+  FILES
+  Exposure.msg
+)
+
+generate_messages(DEPENDENCIES std_msgs)
+
 generate_dynamic_reconfigure_options(
   cfg/UEyeCam.cfg
   )
@@ -80,7 +90,7 @@ generate_dynamic_reconfigure_options(
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${UEYECAM_LIB_NAME} ${UEYECAM_NODELET_NAME}
-  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure cv_bridge image_transport sensor_msgs camera_calibration_parsers camera_info_manager mavros_msgs std_srvs std_msgs
+  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure cv_bridge image_transport sensor_msgs camera_calibration_parsers camera_info_manager mavros_msgs std_srvs std_msgs message_runtime
   DEPENDS OpenCV
   )
 
@@ -89,7 +99,6 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${UEYE_INCLUDE_DIR}
   )
-
 
 add_library(${UEYECAM_LIB_NAME} ${UEYECAM_LIB_SOURCES} ${UEYECAM_LIB_HEADERS})
 target_link_libraries(${UEYECAM_LIB_NAME} ${UEYE_LIBRARY})

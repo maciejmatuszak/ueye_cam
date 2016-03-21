@@ -3,7 +3,6 @@
 #include <cstdlib>
 #include <string>
 #include <std_srvs/Trigger.h>
-#include <std_msgs/Int16.h>
 
 class TriggerReady
 {
@@ -13,32 +12,9 @@ public:
 	{
 		cam0_OK_ = false;
 		cam1_OK_ = false;
-		exposure_ms_ = 0;
-		framerate_hz_ = 20; // default framerate
+		framerate_hz_ = 18; // default framerate TODO get this from the ueye node
 		triggerClient_ = n_.serviceClient<mavros_msgs::CommandTriggerControl>("/mavros/cmd/trigger_control");
 		advertiseService();
-		subscribeCameras();
-	}
-
-	void cam0Ready(const std_msgs::Int16ConstPtr &msg)
-	{
-		exposure_ms_ = msg->data; // Set exposure from cam0
-
-		if (exposure_ms_ > 1000 / framerate_hz_) {
-			ROS_WARN("Exposure time %u ms does not allow %u Hz frame-rate!", exposure_ms_, framerate_hz_);
-		}
-
-		ROS_INFO("Camera 0 waiting for trigger. Exposure set to %u ms", exposure_ms_);
-	}
-
-	void cam1Ready(const std_msgs::Int16ConstPtr &msg)
-	{
-		ROS_INFO("Camera 1 waiting for trigger. Exposure set to %u ms", exposure_ms_); //XXX check if the exposures aren't same.
-	}
-	void subscribeCameras()
-	{
-		cam0_Sub_ = n_.subscribe("cam0/waiting_trigger", 0, &TriggerReady::cam0Ready, this);
-		cam1_Sub_ = n_.subscribe("cam1/waiting_trigger", 0, &TriggerReady::cam1Ready, this);
 	}
 
 	bool servCam0(std_srvs::Trigger::Request &req, std_srvs::Trigger::Response &resp)
@@ -67,16 +43,32 @@ public:
 		return cam1_OK_;
 	}
 
-	int sendTriggerCommand()
+	int enableTrigger()
 	{
-		srv_.request.integration_time = 1000 / framerate_hz_;
+		srv_.request.cycle_time = (1000 / framerate_hz_);
 		srv_.request.trigger_enable = true;
 
 		if (triggerClient_.call(srv_)) {
-			ROS_INFO("Successfully called service trigger_control");
+			ROS_INFO("Successfully enabled camera trigger");
 
 		} else {
-			ROS_ERROR("Failed to call service trigger_control");
+			ROS_ERROR("Failed to call trigger_control service");
+			return 1;
+		}
+
+		return 0;
+	}
+	
+	int disableTrigger()
+	{
+		srv_.request.cycle_time = 0;
+		srv_.request.trigger_enable = false;
+
+		if (triggerClient_.call(srv_)) {
+			ROS_INFO("Successfully disabled camera trigger");
+
+		} else {
+			ROS_ERROR("Failed to call trigger_control service");
 			return 1;
 		}
 
@@ -94,13 +86,9 @@ private:
 
 	bool cam0_OK_;
 	bool cam1_OK_;
-	int exposure_ms_;
 	int framerate_hz_;
 
 	ros::NodeHandle n_;
-
-	ros::Subscriber cam0_Sub_;
-	ros::Subscriber cam1_Sub_;
 
 	ros::ServiceClient triggerClient_;
 	mavros_msgs::CommandTriggerControl srv_;
@@ -115,7 +103,14 @@ int main(int argc, char **argv)
 {
 	ros::init(argc, argv, "StartTrigger");
 	TriggerReady tr;
-
+	
+	ros::Rate r2(5); // Hz
+	
+	while (tr.disableTrigger() && ros::ok()) {
+		ROS_INFO_STREAM("Retrying reaching pixhawk");
+		r2.sleep();
+	}
+	
 	// Define time update rate to call callback function if necessary
 	ros::Rate r(100); // Hz
 
@@ -123,11 +118,9 @@ int main(int argc, char **argv)
 		ros::spinOnce();
 		r.sleep();
 	}
-
+	
 	// Send start trigger command to Pixhawk
-	ros::Rate r2(10); // Hz
-
-	while (tr.sendTriggerCommand() && ros::ok()) {
+	while (tr.enableTrigger() && ros::ok()) {
 		ROS_INFO_STREAM("Retrying reaching pixhawk");
 		r2.sleep();
 	}

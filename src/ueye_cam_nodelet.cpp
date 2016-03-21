@@ -51,10 +51,11 @@
 #include <camera_calibration_parsers/parse.h>
 #include <sensor_msgs/fill_image.h>
 #include <sensor_msgs/image_encodings.h>
-
+#include <cv_bridge/cv_bridge.h>
+#include "opencv2/highgui/highgui.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
 
 //#define DEBUG_PRINTOUT_FRAME_GRAB_RATES
-
 
 using namespace std;
 using namespace sensor_msgs::image_encodings;
@@ -62,7 +63,6 @@ using namespace sensor_msgs::image_encodings;
 
 namespace ueye_cam
 {
-
 
 const std::string UEyeCamNodelet::DEFAULT_FRAME_NAME = "camera";
 const std::string UEyeCamNodelet::DEFAULT_CAMERA_NAME = "camera";
@@ -141,7 +141,12 @@ void UEyeCamNodelet::onInit()
 	local_nh.param<string>("camera_intrinsics_file", cam_intr_filename_, "");
 	local_nh.param<int>("camera_id", cam_id_, ANY_CAMERA);
 	local_nh.param<string>("camera_parameters_file", cam_params_filename_, "");
-
+	local_nh.param<int>("adaptive_exposure_mode", adaptive_exposure_mode_, 0); // 0 - disabled, 1 - enabled (slave), 2 - enabled (master)
+	local_nh.param<float>("adaptive_exposure_min", adaptive_exposure_min_, 0.009);
+	local_nh.param<float>("adaptive_exposure_max", adaptive_exposure_max_, 10.0);
+	
+	adaptive_exposure_ms_ = adaptive_exposure_max_;
+	
 	if (cam_id_ < 0) {
 		WARN_STREAM("Invalid camera ID specified: " << cam_id_ <<
 			    "; setting to ANY_CAMERA");
@@ -157,10 +162,12 @@ void UEyeCamNodelet::onInit()
 
 	// Setup publishers, subscribers, and services
 	ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 100);
-	ros_trig_wait_pub_ = nh.advertise<std_msgs::Int16>(cam_name_ + "/waiting_trigger", 100);
+	ros_exposure_pub_ = nh.advertise<ueye_cam::Exposure>("master_exposure", 1);
 
 	ros_timestamp_sub_ = nh.subscribe("/mavros/cam_imu_sync/cam_imu_stamp", 1,
 					  &UEyeCamNodelet::bufferTimestamp, this);
+	ros_exposure_sub_ = nh.subscribe("master_exposure", 1,
+					  &UEyeCamNodelet::setSlaveExposure, this);		  
 
 	set_cam_info_srv_ = nh.advertiseService(cam_name_ + "/set_camera_info",
 						&UEyeCamNodelet::setCamInfo, this);
@@ -183,9 +190,6 @@ void UEyeCamNodelet::onInit()
 
 		INFO_STREAM("[" << cam_name_ << "] set to external trigger mode");
 	}
-
-	// Ready for IMU-camera trigger
-	sendTriggerWaiting((int)cam_params_.exposure);
 
 	// And start frame grabber and image publisher
 	startFrameGrabber();
@@ -391,7 +395,7 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle &local_nh)
 		if (cam_params_.exposure != prevCamParams.exposure) {
 			if (cam_params_.exposure < 0.0) {
 				WARN_STREAM("Invalid requested exposure: " << cam_params_.exposure <<
-					    "; using current exposure: " << prevCamParams.exposure);
+						"; using current exposure: " << prevCamParams.exposure);
 				cam_params_.exposure = prevCamParams.exposure;
 
 			} else {
@@ -688,10 +692,12 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig &config, uint32_t le
 	    config.frame_rate != cam_params_.frame_rate) {
 		if (setFrameRate(config.auto_frame_rate, config.frame_rate) != IS_SUCCESS) { return; }
 	}
-
-	if (config.auto_exposure != cam_params_.auto_exposure ||
-	    config.exposure != cam_params_.exposure) {
-		if (setExposure(config.auto_exposure, config.exposure) != IS_SUCCESS) { return; }
+	
+	if (adaptive_exposure_mode_ < 1) {
+		if (config.auto_exposure != cam_params_.auto_exposure ||
+		    config.exposure != cam_params_.exposure) {
+			if (setExposure(config.auto_exposure, config.exposure) != IS_SUCCESS) { return; }
+		}
 	}
 
 	if (config.auto_white_balance != cam_params_.auto_white_balance ||
@@ -989,16 +995,27 @@ bool UEyeCamNodelet::setCamInfo(sensor_msgs::SetCameraInfo::Request &req,
 }
 
 
+void UEyeCamNodelet::setSlaveExposure(const ueye_cam::Exposure &msg)
+{
+	if(adaptive_exposure_mode_ == 1) { // accept exposure timing from master camera
+		adaptive_exposure_ms_ = msg.exposure_ms;
+		bool auto_exposure = false;
+		if (setExposure(auto_exposure , adaptive_exposure_ms_) != IS_SUCCESS) {
+			ROS_ERROR("Slave adaptive exposure setting failed");
+		}
+	}
+
+}
+
 void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp &msg)
 {
+	
 	timestamp_buffer_.push_back(msg);
-
-	// XXX add half of exposure time
 
 	// Check whether buffer has stale stamp and if so throw away oldest
 	if (timestamp_buffer_.size() > 100) {
 		timestamp_buffer_.erase(timestamp_buffer_.begin());
-		ROS_ERROR("Dropping timestamp");
+		ROS_ERROR_THROTTLE(1, "Dropping timestamp");
 	}
 
 }
@@ -1052,7 +1069,8 @@ void UEyeCamNodelet::frameGrabLoop()
 					   (INT) 2000 : (INT)(1000.0 / cam_params_.frame_rate * 2);
 
 			if (processNextFrame(eventTimeout) != NULL) {
-				ros_image_.header.stamp = ros_cam_info_.header.stamp = getImageTimestamp();
+				// Save half of exposure time to the timestamp
+				ros_image_.header.stamp = ros_cam_info_.header.stamp = ros::Time(0/*, (cam_params_.exposure / 2) * 1e6*/);
 				// Process new frame
 #ifdef DEBUG_PRINTOUT_FRAME_GRAB_RATES
 				grabbedFrameCount++;
@@ -1120,6 +1138,9 @@ void UEyeCamNodelet::frameGrabLoop()
 
 				if (!frame_grab_alive_ || !ros::ok()) { break; }
 
+				// compute optimal params for next image frame
+				optimizeCaptureParams(ros_image_);
+
 				// buffer the image frame and camera info
 				image_buffer_.push_back(ros_image_);
 				cinfo_buffer_.push_back(ros_cam_info_);
@@ -1135,7 +1156,7 @@ void UEyeCamNodelet::frameGrabLoop()
 				// Check whether buffer has stale data and if so, throw away oldest
 				if (image_buffer_.size() > 100) {
 					image_buffer_.erase(image_buffer_.begin());
-					ROS_ERROR("Dropping image");
+					ROS_ERROR_THROTTLE(1, "%i: Dropping image", cam_id_);
 				}
 
 				if (cinfo_buffer_.size() > 100) { cinfo_buffer_.erase(cinfo_buffer_.begin()); }
@@ -1183,12 +1204,18 @@ void UEyeCamNodelet::sendTriggerReady()
 	}
 }
 
-void UEyeCamNodelet::sendTriggerWaiting(int exposure_ms)
+void UEyeCamNodelet::sendSlaveExposure()
 {
-	std_msgs::Int16 exposure_ready;
-	exposure_ready.data = exposure_ms;
+	if(adaptive_exposure_mode_ == 2)
+	{
+		ueye_cam::Exposure msg;
+		msg.header.stamp = ros::Time::now();
+		msg.header.seq = ros_frame_count_ + 1; // TODO : figure out why this isn't working
 
-	ros_trig_wait_pub_.publish(exposure_ready);
+		msg.exposure_ms = adaptive_exposure_ms_;
+
+		ros_exposure_pub_.publish(msg);
+	}
 }
 
 unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
@@ -1202,7 +1229,10 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 		image = image_buffer_.at(index);
 		cinfo = cinfo_buffer_.at(index);
 
-		image.header.stamp = timestamp_buffer_.at(timestamp_index).frame_stamp;
+		// Add half of exposure time to the actual trigger time
+		double timestamp = image.header.stamp.toSec() + timestamp_buffer_.at(timestamp_index).frame_stamp.toSec();
+
+		image.header.stamp = ros::Time(timestamp);
 		cinfo.header = image.header;
 
 		// Publish image in ROS
@@ -1242,6 +1272,85 @@ unsigned int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 	return 0;
 }
 
+void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
+{
+	
+	if(adaptive_exposure_mode_ == 2 && (ros_frame_count_ % 4 == 0) ) {
+	
+		cv_bridge::CvImagePtr cv_ptr;
+
+		try {
+			cv_ptr = cv_bridge::toCvCopy(frame, sensor_msgs::image_encodings::MONO8);
+
+		} catch (cv_bridge::Exception &e) {
+			ROS_ERROR("cv_bridge exception: %s", e.what());
+			return;
+		}
+	
+		// Compute the histogram
+		int histSize = 256;
+		float range[] = { 0, 256 } ;
+		const float *histRange = { range };
+		cv::Mat hist ;
+
+		cv::calcHist(&cv_ptr->image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
+		cv::normalize(hist, hist, 1.0 , 0, cv::NORM_L1);
+
+		double j = 0, k = 0;
+		double blocksum = 0;
+		
+		for (int i = 1; i <= histSize; i++) {
+			blocksum += hist.at<float>(i-1);
+			if(i % 51 == 0) {
+				j += (i/51) * blocksum;
+				k += blocksum;
+				blocksum = 0;
+			}
+		}
+
+		// Calculate mean sample value
+		double msv = j / k;
+
+		// TODO parameterize this 
+		double setpoint = 2.5;
+		double deadband = 0.4;
+	
+	//	Amount of change to the shutter speed or aperture value can be
+	//	calculated directly from the histogram as the five regions
+	//	of the histogram represent five f-stops. Each time the
+	//	shutter time is doubled/halved the image exposure will
+	//	decrease/increase with one f-stop.
+
+		// Calculate exposure durations
+	
+		if ((msv > setpoint + deadband)) {	// overexposed
+			//adaptive_exposure_ms_ = 1/kP * (msv - setpoint);
+			adaptive_exposure_ms_ *= 0.5 * (msv - setpoint);
+
+		} else if ((msv < setpoint - deadband)) {	// underexposed
+			//adaptive_exposure_ms_ = kP * (setpoint - msv);
+			adaptive_exposure_ms_ *= 2 * (setpoint - msv);
+		}
+		
+		// limit exposure timing
+		if (adaptive_exposure_ms_ > adaptive_exposure_max_) { 
+			adaptive_exposure_ms_ = adaptive_exposure_max_; 
+		} else if (adaptive_exposure_ms_ < adaptive_exposure_min_) {
+			adaptive_exposure_ms_ = adaptive_exposure_min_;
+		}
+		// Set optimal exposure
+		
+		bool auto_exposure = false;
+		if (setExposure(auto_exposure , adaptive_exposure_ms_) != IS_SUCCESS) {
+			ROS_ERROR("Master adaptive exposure setting failed");
+		}
+		//ROS_WARN("exposure setpoint = %f", adaptive_exposure_ms_);
+		// Send exposure message for slave
+		sendSlaveExposure();
+
+	}
+
+}
 
 void UEyeCamNodelet::loadIntrinsicsFile()
 {
@@ -1255,7 +1364,6 @@ void UEyeCamNodelet::loadIntrinsicsFile()
 
 	ros_cam_info_.header.frame_id = "/" + frame_name_;
 }
-
 
 bool UEyeCamNodelet::saveIntrinsicsFile()
 {

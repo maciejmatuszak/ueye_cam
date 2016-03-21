@@ -48,7 +48,6 @@
 #ifndef UEYE_CAM_NODELET_HPP_
 #define UEYE_CAM_NODELET_HPP_
 
-
 #include <nodelet/nodelet.h>
 #include <dynamic_reconfigure/server.h>
 #include <image_transport/image_transport.h>
@@ -58,6 +57,7 @@
 #include <sensor_msgs/SetCameraInfo.h>
 #include <std_msgs/Int16.h>
 #include <std_srvs/Trigger.h>
+#include <ueye_cam/Exposure.h>
 #include <ueye_cam/UEyeCamConfig.h>
 #include <boost/thread/mutex.hpp>
 #include <ueye_cam/ueye_cam_driver.hpp>
@@ -79,7 +79,7 @@ public:
   constexpr static unsigned int RECONFIGURE_CLOSE = 3;
   constexpr static int DEFAULT_IMAGE_WIDTH = 640;  // NOTE: these default values do not matter, as they
   constexpr static int DEFAULT_IMAGE_HEIGHT = 480; // are overwritten by queryCamParams() during connectCam()
-  constexpr static double DEFAULT_EXPOSURE = 33.0;
+  constexpr static double DEFAULT_EXPOSURE = 10.0;
   constexpr static double DEFAULT_FRAME_RATE = 10.0;
   constexpr static int DEFAULT_PIXEL_CLOCK = 25;
   constexpr static int DEFAULT_FLASH_DURATION = 1000;
@@ -142,19 +142,19 @@ protected:
    */
   bool setCamInfo(sensor_msgs::SetCameraInfo::Request& req,
       sensor_msgs::SetCameraInfo::Response& rsp);
+      
+  void setSlaveExposure(const ueye_cam::Exposure& msg);
   
-  // XXX description
   void bufferTimestamp(const mavros_msgs::CamIMUStamp& msg);
-  // XXX description
+
   void sendTriggerReady();
-  // XXX description
-  void sendTriggerWaiting(int exposure_ms);
+
+  void sendSlaveExposure();
 
   /**
    * Loads the camera's intrinsic parameters from camIntrFilename.
    */
   void loadIntrinsicsFile();
-
 
   /**
    * Saves the camera's intrinsic parameters to camIntrFilename.
@@ -176,6 +176,11 @@ protected:
   // XXX descr
   unsigned int stampAndPublishImage(unsigned int index);
   unsigned int findInStampBuffer(unsigned int index);
+  
+  /**
+   * Exposure controller XXX TODO MAKE IT ZERO-COPY
+   */
+  void optimizeCaptureParams(const sensor_msgs::Image& frame);
 
   std::thread frame_grab_thread_;
   bool frame_grab_alive_;
@@ -185,9 +190,10 @@ protected:
   bool cfg_sync_requested_;
 
   image_transport::CameraPublisher ros_cam_pub_;
-  ros::Publisher ros_trig_wait_pub_;
+  ros::Publisher ros_exposure_pub_;
   
   ros::Subscriber ros_timestamp_sub_;
+  ros::Subscriber ros_exposure_sub_;
   
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
@@ -197,7 +203,7 @@ protected:
   std::vector<sensor_msgs::Image> image_buffer_;
   std::vector<sensor_msgs::CameraInfo> cinfo_buffer_;
   std::vector<mavros_msgs::CamIMUStamp> timestamp_buffer_;
-
+  
   ros::ServiceServer set_cam_info_srv_;
   ros::ServiceClient trigger_ready_srv_;
 
@@ -205,6 +211,14 @@ protected:
   std::string cam_topic_;
   std::string cam_intr_filename_;
   std::string cam_params_filename_; // should be valid UEye INI file
+  
+  // Adaptive exposure controller parameters
+  int adaptive_exposure_mode_;
+  float adaptive_exposure_min_;
+  float adaptive_exposure_max_;
+  
+  double adaptive_exposure_ms_;
+  
   ueye_cam::UEyeCamConfig cam_params_;
 };
 
