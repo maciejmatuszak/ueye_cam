@@ -24,6 +24,7 @@ find_package(catkin REQUIRED COMPONENTS
   dynamic_reconfigure
   cv_bridge
   image_transport
+  image_geometry
   sensor_msgs
   mavros_msgs
   std_srvs
@@ -90,7 +91,7 @@ generate_dynamic_reconfigure_options(
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${UEYECAM_LIB_NAME} ${UEYECAM_NODELET_NAME}
-  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure cv_bridge image_transport sensor_msgs camera_calibration_parsers camera_info_manager mavros_msgs std_srvs std_msgs message_runtime
+  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure cv_bridge image_transport image_geometry sensor_msgs camera_calibration_parsers camera_info_manager mavros_msgs std_srvs std_msgs message_runtime
   DEPENDS OpenCV
   )
 

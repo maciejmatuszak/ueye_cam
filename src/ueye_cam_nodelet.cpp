@@ -46,14 +46,6 @@
 *******************************************************************************/
 
 #include "ueye_cam/ueye_cam_nodelet.hpp"
-#include <cstdlib> // needed for getenv()
-#include <ros/package.h>
-#include <camera_calibration_parsers/parse.h>
-#include <sensor_msgs/fill_image.h>
-#include <sensor_msgs/image_encodings.h>
-#include <cv_bridge/cv_bridge.h>
-#include "opencv2/highgui/highgui.hpp"
-#include "opencv2/imgproc/imgproc.hpp"
 
 //#define DEBUG_PRINTOUT_FRAME_GRAB_RATES
 
@@ -162,6 +154,8 @@ void UEyeCamNodelet::onInit()
 
 	// Setup publishers, subscribers, and services
 	ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 100);
+	ros_rect_pub_ = it.advertise(cam_name_ + "/image_rect", 100); // TODO : not hardcode name
+	
 	ros_exposure_pub_ = nh.advertise<ueye_cam::Exposure>("master_exposure", 1);
 
 	ros_timestamp_sub_ = nh.subscribe("/mavros/cam_imu_sync/cam_imu_stamp", 1,
@@ -998,6 +992,7 @@ bool UEyeCamNodelet::setCamInfo(sensor_msgs::SetCameraInfo::Request &req,
 void UEyeCamNodelet::setSlaveExposure(const ueye_cam::Exposure &msg)
 {
 	if(adaptive_exposure_mode_ == 1) { // accept exposure timing from master camera
+		// TODO : re-add check for sequence again
 		adaptive_exposure_ms_ = msg.exposure_ms;
 		bool auto_exposure = false;
 		if (setExposure(auto_exposure , adaptive_exposure_ms_) != IS_SUCCESS) {
@@ -1171,7 +1166,8 @@ void UEyeCamNodelet::frameGrabLoop()
 
 	setStandbyMode();
 	frame_grab_alive_ = false;
-
+	
+	// TODO : investigate why it crashes
 	ERROR_STREAM("Frame grabber loop terminated for [" << cam_name_ << "]");
 }
 
@@ -1210,10 +1206,11 @@ void UEyeCamNodelet::sendSlaveExposure()
 	{
 		ueye_cam::Exposure msg;
 		msg.header.stamp = ros::Time::now();
-		msg.header.seq = ros_frame_count_ + 1; // TODO : figure out why this isn't working
+		//msg.header.seq = ros_frame_count_ + 1; // TODO : This won't work
 
 		msg.exposure_ms = adaptive_exposure_ms_;
-
+		//msg.frame_sequence = ros_frame_count_ + 1;
+		
 		ros_exposure_pub_.publish(msg);
 	}
 }
@@ -1237,6 +1234,9 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index)
 
 		// Publish image in ROS
 		ros_cam_pub_.publish(image, cinfo);
+		
+		// Publish rectified images
+		publishRectifiedImage(image);
 
 		// Erase published images and used timestamp from buffer
 		image_buffer_.erase(image_buffer_.begin() + index);
@@ -1272,6 +1272,29 @@ unsigned int UEyeCamNodelet::findInStampBuffer(unsigned int index)
 	return 0;
 }
 
+void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::Image &frame)
+{
+	
+	cv_bridge::CvImagePtr cv_ptr;
+
+	try {
+		cv_ptr = cv_bridge::toCvCopy(frame, sensor_msgs::image_encodings::MONO8);
+
+	} catch (cv_bridge::Exception &e) {
+		ROS_ERROR("cv_bridge exception: %s", e.what());
+		return;
+	}
+	
+	// Rectify image
+	cv::Mat frame_rect;
+	camera_model_.rectifyImage(cv_ptr->image, frame_rect, cv::INTER_LINEAR);
+	
+	// Publish rectified image
+	sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(frame.header, frame.encoding, frame_rect).toImageMsg();
+	ros_rect_pub_.publish(rect_msg);
+
+}
+
 void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 {
 	
@@ -1294,7 +1317,7 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		cv::Mat hist ;
 
 		cv::calcHist(&cv_ptr->image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
-		cv::normalize(hist, hist, 1.0 , 0, cv::NORM_L1);
+		cv::normalize(hist, hist, 1.0 , 0, cv::NORM_L1); // TODO : check normalization
 
 		double j = 0, k = 0;
 		double blocksum = 0;
@@ -1315,14 +1338,13 @@ void UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::Image &frame)
 		double setpoint = 2.5;
 		double deadband = 0.4;
 	
-	//	Amount of change to the shutter speed or aperture value can be
-	//	calculated directly from the histogram as the five regions
-	//	of the histogram represent five f-stops. Each time the
-	//	shutter time is doubled/halved the image exposure will
-	//	decrease/increase with one f-stop.
+		// Amount of change to the shutter speed or aperture value can be
+		// calculated directly from the histogram as the five regions
+		// of the histogram represent five f-stops. Each time the
+		// shutter time is doubled/halved the image exposure will
+		// decrease/increase with one f-stop.
 
 		// Calculate exposure durations
-	
 		if ((msv > setpoint + deadband)) {	// overexposed
 			//adaptive_exposure_ms_ = 1/kP * (msv - setpoint);
 			adaptive_exposure_ms_ *= 0.5 * (msv - setpoint);
@@ -1360,6 +1382,7 @@ void UEyeCamNodelet::loadIntrinsicsFile()
 
 	if (camera_calibration_parsers::readCalibration(cam_intr_filename_, cam_name_, ros_cam_info_)) {
 		DEBUG_STREAM("Loaded intrinsics parameters for [" << cam_name_ << "]");
+    		camera_model_.fromCameraInfo(ros_cam_info_);
 	}
 
 	ros_cam_info_.header.frame_id = "/" + frame_name_;

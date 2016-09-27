@@ -48,9 +48,13 @@
 #ifndef UEYE_CAM_NODELET_HPP_
 #define UEYE_CAM_NODELET_HPP_
 
+#include <cstdlib>
+#include <vector>
 #include <nodelet/nodelet.h>
+#include <ros/package.h>
 #include <dynamic_reconfigure/server.h>
 #include <image_transport/image_transport.h>
+#include <image_geometry/pinhole_camera_model.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CameraInfo.h>
 #include <mavros_msgs/CamIMUStamp.h>
@@ -61,7 +65,13 @@
 #include <ueye_cam/UEyeCamConfig.h>
 #include <boost/thread/mutex.hpp>
 #include <ueye_cam/ueye_cam_driver.hpp>
-#include <vector>
+#include <camera_calibration_parsers/parse.h>
+#include <sensor_msgs/fill_image.h>
+#include <sensor_msgs/image_encodings.h>
+#include <cv_bridge/cv_bridge.h>
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+#include <opencv2/gpu/gpu.hpp>
 
 namespace ueye_cam {
 
@@ -178,6 +188,11 @@ protected:
   unsigned int findInStampBuffer(unsigned int index);
   
   /**
+   * Image rectification
+   */
+  void publishRectifiedImage(const sensor_msgs::Image &frame);
+
+  /**
    * Exposure controller XXX TODO MAKE IT ZERO-COPY
    */
   void optimizeCaptureParams(const sensor_msgs::Image& frame);
@@ -190,6 +205,7 @@ protected:
   bool cfg_sync_requested_;
 
   image_transport::CameraPublisher ros_cam_pub_;
+  image_transport::Publisher ros_rect_pub_;
   ros::Publisher ros_exposure_pub_;
   
   ros::Subscriber ros_timestamp_sub_;
@@ -198,6 +214,9 @@ protected:
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
   unsigned int ros_frame_count_;
+  
+  // Image rectification
+  image_geometry::PinholeCameraModel camera_model_;
   
   // Data buffers
   std::vector<sensor_msgs::Image> image_buffer_;
