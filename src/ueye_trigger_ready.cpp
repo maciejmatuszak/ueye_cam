@@ -14,6 +14,7 @@ public:
 		cam0_OK_ = false;
 		cam1_OK_ = false;
 		exposure_ms_ = 0;
+		framerate_hz_ = 30; // default framerate
 		triggerClient_ = n_.serviceClient<mavros_msgs::CommandTriggerControl>("/mavros/cmd/trigger_control");
 		advertiseService();
 		subscribeCameras();
@@ -22,6 +23,9 @@ public:
 	void cam0Ready(const std_msgs::Int16ConstPtr &msg)
 	{
 		exposure_ms_ = msg->data; // Set exposure from cam0
+		if (exposure_ms_ > 1000/framerate_hz_) {
+			ROS_WARN("Exposure time %u ms does not allow %u Hz frame-rate!", exposure_ms_, framerate_hz_);
+		}
 		ROS_INFO("Camera 0 waiting for trigger. Exposure set to %u ms", exposure_ms_);
 	}
 
@@ -63,7 +67,7 @@ public:
 
 	int sendTriggerCommand()
 	{
-		srv_.request.integration_time = exposure_ms_;
+		srv_.request.integration_time = 1000/framerate_hz_;
 		srv_.request.trigger_enable = true;
 
 		if (triggerClient_.call(srv_)) {
@@ -89,6 +93,7 @@ private:
 	bool cam0_OK_;
 	bool cam1_OK_;
 	int exposure_ms_;
+	int framerate_hz_;
 
 	ros::NodeHandle n_;
 
