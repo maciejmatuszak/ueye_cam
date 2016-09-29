@@ -54,11 +54,14 @@
 #include <image_transport/image_transport.h>
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/CameraInfo.h>
+#include <mavros_msgs/CamIMUStamp.h>
 #include <sensor_msgs/SetCameraInfo.h>
+#include <std_msgs/Int16.h>
+#include <std_srvs/Trigger.h>
 #include <ueye_cam/UEyeCamConfig.h>
 #include <boost/thread/mutex.hpp>
 #include <ueye_cam/ueye_cam_driver.hpp>
-
+#include <vector>
 
 namespace ueye_cam {
 
@@ -140,6 +143,13 @@ protected:
    */
   bool setCamInfo(sensor_msgs::SetCameraInfo::Request& req,
       sensor_msgs::SetCameraInfo::Response& rsp);
+  
+  // XXX description
+  void bufferTimestamp(const mavros_msgs::CamIMUStamp& msg);
+  // XXX description
+  void sendTriggerReady();
+  // XXX description
+  void sendTriggerWaiting(int exposure_ms);
 
   /**
    * Loads the camera's intrinsic parameters from camIntrFilename.
@@ -158,7 +168,7 @@ protected:
   void frameGrabLoop();
   void startFrameGrabber();
   void stopFrameGrabber();
-
+  
   const static std::map<INT, std::string> ENCODING_DICTIONARY;
   /**
    * Transfers the current frame content into given sensor_msgs::Image,
@@ -167,10 +177,21 @@ protected:
    */
   bool fillMsgData(sensor_msgs::Image& img) const;
 
+   /**
+   * Secondary thread which publishes timestamped image frames.
+   */
+  void framePublishLoop();
+  void startFramePublisher();
+  void stopFramePublisher();
+
   /**
    * Returns image's timestamp or current wall time if driver call fails.
    */
   ros::Time getImageTimestamp();
+  
+  // XXX descr
+  unsigned int stampAndPublishImage(unsigned int index);
+  unsigned int findInImgBuffer(unsigned int index);
 
   /**
    * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
@@ -181,19 +202,32 @@ protected:
 
   std::thread frame_grab_thread_;
   bool frame_grab_alive_;
+  
+  std::thread frame_pub_thread_;
+  bool frame_pub_alive_;
 
   ReconfigureServer* ros_cfg_;
   boost::recursive_mutex ros_cfg_mutex_;
   bool cfg_sync_requested_;
 
   image_transport::CameraPublisher ros_cam_pub_;
+  ros::Publisher ros_trig_wait_pub_;
+  
+  ros::Subscriber ros_timestamp_sub_;
+  
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
   unsigned int ros_frame_count_;
   ros::Publisher timeout_pub_;
   unsigned long long int timeout_count_;
+  
+  // Data buffers
+  std::vector<sensor_msgs::Image> image_buffer_;
+  std::vector<sensor_msgs::CameraInfo> cinfo_buffer_;
+  std::vector<mavros_msgs::CamIMUStamp> timestamp_buffer_;
 
   ros::ServiceServer set_cam_info_srv_;
+  ros::ServiceClient trigger_ready_srv_;
 
   std::string frame_name_;
   std::string cam_topic_;
