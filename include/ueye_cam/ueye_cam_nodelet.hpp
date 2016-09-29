@@ -168,7 +168,7 @@ protected:
   void frameGrabLoop();
   void startFrameGrabber();
   void stopFrameGrabber();
-  
+
   const static std::map<INT, std::string> ENCODING_DICTIONARY;
   /**
    * Transfers the current frame content into given sensor_msgs::Image,
@@ -177,13 +177,6 @@ protected:
    */
   bool fillMsgData(sensor_msgs::Image& img) const;
 
-   /**
-   * Secondary thread which publishes timestamped image frames.
-   */
-  void framePublishLoop();
-  void startFramePublisher();
-  void stopFramePublisher();
-
   /**
    * Returns image's timestamp or current wall time if driver call fails.
    */
@@ -191,7 +184,7 @@ protected:
   
   // XXX descr
   unsigned int stampAndPublishImage(unsigned int index);
-  unsigned int findInImgBuffer(unsigned int index);
+  unsigned int findInStampBuffer(unsigned int index);
 
   /**
    * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
@@ -202,9 +195,6 @@ protected:
 
   std::thread frame_grab_thread_;
   bool frame_grab_alive_;
-  
-  std::thread frame_pub_thread_;
-  bool frame_pub_alive_;
 
   ReconfigureServer* ros_cfg_;
   boost::recursive_mutex ros_cfg_mutex_;

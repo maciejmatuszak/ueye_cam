@@ -14,7 +14,7 @@ public:
 		cam0_OK_ = false;
 		cam1_OK_ = false;
 		exposure_ms_ = 0;
-		framerate_hz_ = 30; // default framerate
+		framerate_hz_ = 20; // default framerate
 		triggerClient_ = n_.serviceClient<mavros_msgs::CommandTriggerControl>("/mavros/cmd/trigger_control");
 		advertiseService();
 		subscribeCameras();

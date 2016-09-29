@@ -77,7 +77,6 @@ UEyeCamNodelet::UEyeCamNodelet():
     nodelet::Nodelet(),
     UEyeCamDriver(ANY_CAMERA, DEFAULT_CAMERA_NAME),
     frame_grab_alive_(false),
-    frame_pub_alive_(false),
     ros_cfg_(NULL),
     cfg_sync_requested_(false),
     ros_frame_count_(0),
@@ -172,11 +171,6 @@ void UEyeCamNodelet::onInit() {
   timeout_pub_ = nh.advertise<std_msgs::UInt64>(cam_name_ + "/" + timeout_topic_, 1, true);
   std_msgs::UInt64 timeout_msg; timeout_msg.data = 0; timeout_pub_.publish(timeout_msg);
   trigger_ready_srv_ = nh.serviceClient<std_srvs::Trigger>(cam_name_ + "/trigger_ready");
-  
-  // Setup data buffers
-  image_buffer_.reserve(10);
-  cinfo_buffer_.reserve(10);
-  timestamp_buffer_.reserve(10);
 
   // Initiate camera and start capture
   if (connectCam() != IS_SUCCESS) {
@@ -186,26 +180,27 @@ void UEyeCamNodelet::onInit() {
 
   ros_cfg_->setCallback(f); // this will call configCallback, which will configure the camera's parameters
   
+  if (cam_params_.ext_trigger_mode) {
+        if (setExtTriggerMode() != IS_SUCCESS) {
+          ERROR_STREAM("Setting trigger mode failed for [" << cam_name_ << "]");
+          ros::shutdown();
+          return;
+        }
+        INFO_STREAM("[" << cam_name_ << "] set to external trigger mode");
+  }
+  
   // Ready for IMU-camera trigger
   sendTriggerWaiting((int)cam_params_.exposure); 
   
   // And start frame grabber and image publisher
-  startFrameGrabber(); 
-  startFramePublisher();
+  startFrameGrabber();
   
   // Start IMU-camera trigger
   sendTriggerReady(); 
   
   INFO_STREAM(
-      "UEye camera [" << cam_name_ << "] initialized on topic " << ros_cam_pub_.getTopic() << endl <<
-      "Subsampling:\t\t" << cam_params_.subsampling << endl <<
-      "Master Gain:\t\t" << cam_params_.master_gain << endl <<
-      "Exposure (ms):\t\t" << cam_params_.exposure << endl <<
-      "Ext Trigger Mode:\t" << cam_params_.ext_trigger_mode << endl <<
-      "Frame Rate (Hz):\t" << cam_params_.frame_rate << endl <<
+      "UEye camera [" << cam_name_ << "] initialized on topic " << ros_cam_pub_.getTopic() << endl);
       "Output Rate (Hz):\t" << cam_params_.output_rate << endl <<
-      "Pixel Clock (MHz):\t" << cam_params_.pixel_clock << endl
-      );
 }
 
 
@@ -868,7 +863,6 @@ INT UEyeCamNodelet::disconnectCam() {
 
   if (isConnected()) {
     stopFrameGrabber();
-    stopFramePublisher();
     is_err = UEyeCamDriver::disconnectCam();
   }
 
@@ -892,15 +886,14 @@ void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStamp& msg){
   timestamp_buffer_.push_back(msg);
   
   // XXX add half of exposure time
-  // XXX check for dropped timestamp msg
   
-  // Check whether buffer exceeds limit size and if so throw away oldest image
-	if(timestamp_buffer_.size() > 5){
-		timestamp_buffer_.erase(timestamp_buffer_.begin());
-	}
-  
+  // Check whether buffer has stale stamp and if so throw away oldest
+  if(timestamp_buffer_.size() > 100) {
+     timestamp_buffer_.erase(timestamp_buffer_.begin());
+     ROS_ERROR("Dropping timestamp");
+  }
+	
 }
-
 
 void UEyeCamNodelet::frameGrabLoop() {
 #ifdef DEBUG_PRINTOUT_FRAME_GRAB_RATES
@@ -918,55 +911,16 @@ void UEyeCamNodelet::frameGrabLoop() {
 
   DEBUG_STREAM("Starting threaded frame grabber loop for [" << cam_name_ << "]");
 
-  ros::Rate idleDelay(200);
+  ros::Rate idleDelay(500);
 
-  int prevNumSubscribers = 0;
-  int currNumSubscribers = 0;
   while (frame_grab_alive_ && ros::ok()) {
-    // Initialize live video mode if camera was previously asleep, and ROS image topic has subscribers;
-    // and stop live video mode if ROS image topic no longer has any subscribers
-    currNumSubscribers = ros_cam_pub_.getNumSubscribers();
-    if (currNumSubscribers > 0 && prevNumSubscribers <= 0) {
       // Reset reference time to prevent throttling first frame
       output_rate_mutex_.lock();
       init_publish_time_ = ros::Time(0);
       prev_output_frame_idx_ = 0;
       output_rate_mutex_.unlock();
 
-      if (cam_params_.ext_trigger_mode) {
-        if (setExtTriggerMode() != IS_SUCCESS) {
-          ERROR_STREAM("Shutting down driver nodelet for [" << cam_name_ << "]");
-          ros::shutdown();
-          return;
-        }
-        INFO_STREAM("[" << cam_name_ << "] set to external trigger mode");
-      } else {
-        // NOTE: need to copy flash parameters to local copies since
-        //       cam_params_.flash_duration is type int, and also sizeof(int)
-        //       may not equal to sizeof(INT) / sizeof(UINT)
-        INT flash_delay = cam_params_.flash_delay;
-        UINT flash_duration = cam_params_.flash_duration;
-        if ((setFreeRunMode() != IS_SUCCESS) ||
-            (setFlashParams(flash_delay, flash_duration) != IS_SUCCESS)) {
-          ERROR_STREAM("Shutting down driver nodelet for [" << cam_name_ << "]");
-          ros::shutdown();
-          return;
-        }
-        // Copy back actual flash parameter values that were set
-        cam_params_.flash_delay = flash_delay;
-        cam_params_.flash_duration = flash_duration;
-        INFO_STREAM("[" << cam_name_ << "] set to free-run mode");
-      }
-    } else if (currNumSubscribers <= 0 && prevNumSubscribers > 0) {
-      if (setStandbyMode() != IS_SUCCESS) {
-        ERROR_STREAM("Shutting down driver nodelet for [" << cam_name_ << "]");
-        ros::shutdown();
-        return;
-      }
-      INFO_STREAM("[" << cam_name_ << "] set to standby mode");
-    }
-    prevNumSubscribers = currNumSubscribers;
-
+  
     // Send updated dyncfg parameters if previously changed
     if (cfg_sync_requested_) {
       if (ros_cfg_mutex_.try_lock()) { // Make sure that dynamic reconfigure server or config callback is not active
@@ -1062,12 +1016,22 @@ void UEyeCamNodelet::frameGrabLoop() {
         
         // buffer the image frame and camera info
         image_buffer_.push_back(ros_image_);
- 	cinfo_buffer_.push_back(ros_cam_info_);
+ 	      cinfo_buffer_.push_back(ros_cam_info_);
  	
- 	// throw away old frames
- 	if(image_buffer_.size() > 5) image_buffer_.erase(image_buffer_.begin()); 
- 	if(cinfo_buffer_.size() > 5) cinfo_buffer_.erase(cinfo_buffer_.begin());
- 	      
+ 	      if(image_buffer_.size() && timestamp_buffer_.size()){
+          unsigned int i;
+          for(i = 0; i < image_buffer_.size() && timestamp_buffer_.size() > 0 ;) {
+	             i += stampAndPublishImage(i);
+          }
+        }
+        
+         // Check whether buffer has stale data and if so, throw away oldest
+ 	      if(image_buffer_.size() > 100) {
+ 	        image_buffer_.erase(image_buffer_.begin());
+ 	        ROS_ERROR("Dropping image");
+ 	      }
+ 	      if(cinfo_buffer_.size() > 100) cinfo_buffer_.erase(cinfo_buffer_.begin());
+
       }
     }
 
@@ -1078,7 +1042,7 @@ void UEyeCamNodelet::frameGrabLoop() {
   setStandbyMode();
   frame_grab_alive_ = false;
 
-  DEBUG_STREAM("Frame grabber loop terminated for [" << cam_name_ << "]");
+  ERROR_STREAM("Frame grabber loop terminated for [" << cam_name_ << "]");
 }
 
 
@@ -1094,36 +1058,6 @@ void UEyeCamNodelet::stopFrameGrabber() {
     frame_grab_thread_.join();
   }
   frame_grab_thread_ = thread();
-}
-
-
-void UEyeCamNodelet::framePublishLoop() {
-
-  ros::Rate idleDelay(200);
-  
-  if(image_buffer_.size() && timestamp_buffer_.size()){
-    unsigned int i;
-    for(i = 0; i < image_buffer_.size() && timestamp_buffer_.size() > 0 ;) {
-	    i += stampAndPublishImage(i);
-    }
-  }
-  
-  // if (!frame_pub_alive_ || !ros::ok()) break; XXX fix this later
-  idleDelay.sleep();
-}
-
-void UEyeCamNodelet::startFramePublisher() {
-  frame_pub_alive_ = true;
-  frame_pub_thread_ = thread(bind(&UEyeCamNodelet::framePublishLoop, this));
-}
-
-
-void UEyeCamNodelet::stopFramePublisher() {
-  frame_pub_alive_ = false;
-  if (frame_pub_thread_.joinable()) {
-    frame_pub_thread_.join();
-  }
-  frame_pub_thread_ = thread();
 }
 
 void UEyeCamNodelet::sendTriggerReady(){
@@ -1143,7 +1077,7 @@ void UEyeCamNodelet::sendTriggerWaiting(int exposure_ms){
 }
 
 unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index) {
-  int timestamp_index = findInImgBuffer(index);
+  int timestamp_index = findInStampBuffer(index);
  
  	if (timestamp_index) {
  	  // Copy corresponding images and time stamps
@@ -1170,7 +1104,7 @@ unsigned int UEyeCamNodelet::stampAndPublishImage(unsigned int index) {
 	}
 }
 
-unsigned int UEyeCamNodelet::findInImgBuffer(unsigned int index) {
+unsigned int UEyeCamNodelet::findInStampBuffer(unsigned int index) {
   // Check whether there is at least one image in image buffer
  	if(image_buffer_.size()<1){
  		return 0;
