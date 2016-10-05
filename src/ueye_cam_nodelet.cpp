@@ -52,6 +52,8 @@
 #include <std_msgs/UInt64.h>
 #include <sensor_msgs/fill_image.h>
 #include <sensor_msgs/image_encodings.h>
+#include <cv_bridge/cv_bridge.h>
+
 
 
 //#define DEBUG_PRINTOUT_FRAME_GRAB_RATES
@@ -67,6 +69,7 @@ namespace ueye_cam {
 const std::string UEyeCamNodelet::DEFAULT_FRAME_NAME = "camera";
 const std::string UEyeCamNodelet::DEFAULT_CAMERA_NAME = "camera";
 const std::string UEyeCamNodelet::DEFAULT_CAMERA_TOPIC = "image_raw";
+const std::string UEyeCamNodelet::DEFAULT_CAMERA_TOPIC_RECT = "image_rect";
 const std::string UEyeCamNodelet::DEFAULT_TIMEOUT_TOPIC = "timeout_count";
 const std::string UEyeCamNodelet::DEFAULT_COLOR_MODE = "";
 constexpr int UEyeCamDriver::ANY_CAMERA; // Needed since CMakeLists.txt creates 2 separate libraries: one for non-ROS parent class, and one for ROS child class
@@ -82,6 +85,7 @@ UEyeCamNodelet::UEyeCamNodelet():
     ros_frame_count_(0),
     timeout_count_(0),
     cam_topic_(DEFAULT_CAMERA_TOPIC),
+    cam_topic_rect_(DEFAULT_CAMERA_TOPIC_RECT),
     timeout_topic_(DEFAULT_TIMEOUT_TOPIC),
     cam_intr_filename_(""),
     cam_params_filename_(""),
@@ -142,6 +146,7 @@ void UEyeCamNodelet::onInit() {
   local_nh.param<string>("camera_name", cam_name_, DEFAULT_CAMERA_NAME);
   local_nh.param<string>("frame_name", frame_name_, DEFAULT_FRAME_NAME);
   local_nh.param<string>("camera_topic", cam_topic_, DEFAULT_CAMERA_TOPIC);
+  local_nh.param<string>("camera_topic_rect", cam_topic_rect_, DEFAULT_CAMERA_TOPIC_RECT);
   local_nh.param<string>("timeout_topic", timeout_topic_, DEFAULT_TIMEOUT_TOPIC);
   local_nh.param<string>("camera_intrinsics_file", cam_intr_filename_, "");
   local_nh.param<int>("camera_id", cam_id_, ANY_CAMERA);
@@ -161,6 +166,8 @@ void UEyeCamNodelet::onInit() {
 
   // Setup publishers, subscribers, and services
   ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 1);
+  ros_rect_pub_ = it.advertise(cam_name_ + "/" + cam_topic_rect_, 1);
+
   set_cam_info_srv_ = nh.advertiseService(cam_name_ + "/set_camera_info",
       &UEyeCamNodelet::setCamInfo, this);
   timeout_pub_ = nh.advertise<std_msgs::UInt64>(cam_name_ + "/" + timeout_topic_, 1, true);
@@ -909,7 +916,7 @@ void UEyeCamNodelet::frameGrabLoop() {
   while (frame_grab_alive_ && ros::ok()) {
     // Initialize live video mode if camera was previously asleep, and ROS image topic has subscribers;
     // and stop live video mode if ROS image topic no longer has any subscribers
-    currNumSubscribers = ros_cam_pub_.getNumSubscribers();
+    currNumSubscribers = ros_cam_pub_.getNumSubscribers() + ros_rect_pub_.getNumSubscribers();
     if (currNumSubscribers > 0 && prevNumSubscribers <= 0) {
       // Reset reference time to prevent throttling first frame
       output_rate_mutex_.lock();
@@ -1045,6 +1052,8 @@ void UEyeCamNodelet::frameGrabLoop() {
         if (!frame_grab_alive_ || !ros::ok()) break;
 
         ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
+        publishRectifiedImage(img_msg_ptr);
+
       }
     }
 
@@ -1143,7 +1152,9 @@ void UEyeCamNodelet::loadIntrinsicsFile() {
   }
 
   if (camera_calibration_parsers::readCalibration(cam_intr_filename_, cam_name_, ros_cam_info_)) {
-    DEBUG_STREAM("Loaded intrinsics parameters for [" << cam_name_ << "]");
+
+      camera_model_.fromCameraInfo(ros_cam_info_);
+      ROS_INFO_STREAM("Loaded intrinsics parameters for [" << cam_name_ << "]");
   }
   ros_cam_info_.header.frame_id = "/" + frame_name_;
 }
@@ -1187,7 +1198,39 @@ void UEyeCamNodelet::handleTimeout() {
   std_msgs::UInt64 timeout_msg;
   timeout_msg.data = ++timeout_count_;
   timeout_pub_.publish(timeout_msg);
-};
+}
+
+void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::ImageConstPtr imagePtr)
+{
+    //We can not run without camera info intrinsics
+    if(!camera_model_.initialized()){
+        //lets be polite and tell the user something is wrong
+        if(ros_rect_pub_.getNumSubscribers() > 0)
+        {
+            ROS_WARN_ONCE("A node subscribed to rectified image topic but no camera info was configured!!! No image will be published");
+        }
+
+        return;
+    }
+
+    cv_bridge::CvImagePtr cv_ptr;
+    //we need CV version of an image...
+    try {
+        cv_ptr = cv_bridge::toCvCopy(*imagePtr, imagePtr->encoding);
+
+    } catch (cv_bridge::Exception &e) {
+        ROS_ERROR("cv_bridge exception: %s", e.what());
+        return;
+    }
+
+    // Rectify image
+    cv::Mat frame_rect;
+    camera_model_.rectifyImage(cv_ptr->image, frame_rect, cv::INTER_LINEAR);
+
+    // Publish rectified image
+    sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(imagePtr->header, imagePtr->encoding, frame_rect).toImageMsg();
+    ros_rect_pub_.publish(rect_msg);
+}
 
 
 } // namespace ueye_cam

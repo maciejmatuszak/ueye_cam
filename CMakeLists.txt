@@ -24,6 +24,8 @@ find_package(catkin REQUIRED COMPONENTS
   dynamic_reconfigure
   image_transport
   sensor_msgs
+  image_geometry
+  cv_bridge
   camera_calibration_parsers
   camera_info_manager
   )
@@ -76,7 +78,7 @@ generate_dynamic_reconfigure_options(
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${UEYECAM_LIB_NAME} ${UEYECAM_NODELET_NAME}
-  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure image_transport sensor_msgs camera_calibration_parsers camera_info_manager
+  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure image_transport sensor_msgs image_geometry cv_bridge camera_calibration_parsers camera_info_manager
   )
 
 include_directories(

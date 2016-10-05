@@ -58,6 +58,7 @@
 #include <ueye_cam/UEyeCamConfig.h>
 #include <boost/thread/mutex.hpp>
 #include <ueye_cam/ueye_cam_driver.hpp>
+#include <image_geometry/pinhole_camera_model.h>
 
 
 namespace ueye_cam {
@@ -84,6 +85,7 @@ public:
   const static std::string DEFAULT_FRAME_NAME;
   const static std::string DEFAULT_CAMERA_NAME;
   const static std::string DEFAULT_CAMERA_TOPIC;
+  const static std::string DEFAULT_CAMERA_TOPIC_RECT;
   const static std::string DEFAULT_TIMEOUT_TOPIC;
   const static std::string DEFAULT_COLOR_MODE;
 
@@ -173,6 +175,12 @@ protected:
   ros::Time getImageTimestamp();
 
   /**
+    * Image rectification
+    */
+  void publishRectifiedImage(const sensor_msgs::ImageConstPtr imagePtr);
+
+
+  /**
    * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
    */
   ros::Time getImageTickTimestamp();
@@ -187,16 +195,23 @@ protected:
   bool cfg_sync_requested_;
 
   image_transport::CameraPublisher ros_cam_pub_;
+  image_transport::Publisher ros_rect_pub_;
+
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
   unsigned int ros_frame_count_;
   ros::Publisher timeout_pub_;
   unsigned long long int timeout_count_;
 
+  // Image rectification
+  image_geometry::PinholeCameraModel camera_model_;
+
+
   ros::ServiceServer set_cam_info_srv_;
 
   std::string frame_name_;
   std::string cam_topic_;
+  std::string cam_topic_rect_;
   std::string timeout_topic_;
   std::string cam_intr_filename_;
   std::string cam_params_filename_; // should be valid UEye INI file
