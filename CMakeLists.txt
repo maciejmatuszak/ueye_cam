@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 2.8.3)
 
 project(ueye_cam)
 
+set(CMAKE_VERBOSE_MAKEFILE ON)
+
 # C++11 Needed
 include(CheckCXXCompilerFlag)
 
@@ -28,6 +30,10 @@ find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   camera_calibration_parsers
   camera_info_manager
+  mavros_msgs
+  std_srvs
+  std_msgs
+  message_generation
   )
 catkin_destinations() # define ${CATKIN_PACKAGE_SHARE_DESTINATION}
 
@@ -71,6 +77,13 @@ set(UEYECAM_NODELET_HEADERS
   include/ueye_cam/ueye_cam_nodelet.hpp
 )
 
+add_message_files(DIRECTORY msg
+                  FILES
+                  Exposure.msg
+                 )
+
+generate_messages(DEPENDENCIES std_msgs)
+
 generate_dynamic_reconfigure_options(
   cfg/UEyeCam.cfg
   )
@@ -78,7 +91,7 @@ generate_dynamic_reconfigure_options(
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${UEYECAM_LIB_NAME} ${UEYECAM_NODELET_NAME}
-  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure image_transport sensor_msgs image_geometry cv_bridge camera_calibration_parsers camera_info_manager
+  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure image_transport sensor_msgs image_geometry cv_bridge camera_calibration_parsers camera_info_manager mavros_msgs std_srvs std_msgs message_runtime
   )
 
 include_directories(
@@ -97,6 +110,13 @@ add_dependencies(${UEYECAM_NODELET_NAME} ${PROJECT_NAME}_gencfg)
 
 add_executable(check_ueye_api src/check_ueye_api.cpp)
 target_link_libraries(check_ueye_api ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})
+
+add_executable(trigger_commander src/trigger_ready.cpp )
+
+target_link_libraries(trigger_commander
+  $ {catkin_LIBRARIES}
+  )
+
 
 # Do not package the barebones IDS drivers, since they will mask over the official drivers (when present)
 #if(USE_UNOFFICIAL_UEYE_DRIVERS)

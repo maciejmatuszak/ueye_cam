@@ -1,0 +1,6 @@
+<launch>
+	<!-- launch-prefix="gdb -ex run --args"-->
+  <node pkg="ueye_cam" type="trigger_commander" name="trigger_commander" output="screen"   >
+    <param name="cameras" type="str" value="cam0 cam1 cam2" /> 
+  </node>
+</launch>
