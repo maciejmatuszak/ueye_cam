@@ -1,6 +1,10 @@
+<!-- trigger_commander is usually run as rosrun, this file here is just for debugging convenience -->
+
 <launch>
-	<!-- launch-prefix="gdb -ex run --args"-->
-  <node pkg="ueye_cam" type="trigger_commander" name="trigger_commander" output="screen"   >
-    <param name="cameras" type="str" value="cam0 cam1 cam2" /> 
+  <node pkg="ueye_cam" type="trigger_commander" name="trigger" output="screen"   >
+    <param name="cameras" value="cam0 cam1" /> 
+    <param name="trigger_control_srv" type="str" value="/px4/command/trigger" /> 
+    <param name="trigger_control_ignore_response" type="bool" value="true" /> 
+    
   </node>
 </launch>

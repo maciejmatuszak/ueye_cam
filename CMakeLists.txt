@@ -31,7 +31,6 @@ find_package(catkin REQUIRED COMPONENTS
   camera_calibration_parsers
   camera_info_manager
   mavros_msgs
-  std_srvs
   std_msgs
   message_generation
   )
@@ -82,6 +81,10 @@ add_message_files(DIRECTORY msg
                   Exposure.msg
                  )
 
+add_service_files(
+    DIRECTORY srv
+    FILES CameraReady.srv)
+
 generate_messages(DEPENDENCIES std_msgs)
 
 generate_dynamic_reconfigure_options(
@@ -91,7 +94,7 @@ generate_dynamic_reconfigure_options(
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${UEYECAM_LIB_NAME} ${UEYECAM_NODELET_NAME}
-  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure image_transport sensor_msgs image_geometry cv_bridge camera_calibration_parsers camera_info_manager mavros_msgs std_srvs std_msgs message_runtime
+  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure image_transport sensor_msgs image_geometry cv_bridge camera_calibration_parsers camera_info_manager mavros_msgs std_msgs message_runtime
   )
 
 include_directories(
@@ -113,9 +116,7 @@ target_link_libraries(check_ueye_api ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})
 
 add_executable(trigger_commander src/trigger_ready.cpp )
 
-target_link_libraries(trigger_commander
-  $ {catkin_LIBRARIES}
-  )
+target_link_libraries(trigger_commander ${catkin_LIBRARIES}  )
 
 
 # Do not package the barebones IDS drivers, since they will mask over the official drivers (when present)
