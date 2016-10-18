@@ -69,11 +69,14 @@ namespace ueye_cam {
 
 const std::string UEyeCamNodelet::DEFAULT_FRAME_NAME = "camera";
 const std::string UEyeCamNodelet::DEFAULT_CAMERA_NAME = "camera";
+const std::string UEyeCamNodelet::DEFAULT_CAMERA_IMU_TOPIC = "/cam_imu_sync/cam_imu_stamp";
+const std::string UEyeCamNodelet::DEFAULT_CAMERA_READY_SERVICE = "/trigger/camera_ready";
 const std::string UEyeCamNodelet::DEFAULT_CAMERA_TOPIC = "image_raw";
 const std::string UEyeCamNodelet::DEFAULT_CAMERA_TOPIC_RECT = "image_rect";
 const std::string UEyeCamNodelet::DEFAULT_TIMEOUT_TOPIC = "timeout_count";
 const std::string UEyeCamNodelet::DEFAULT_COLOR_MODE = "";
 constexpr int UEyeCamDriver::ANY_CAMERA; // Needed since CMakeLists.txt creates 2 separate libraries: one for non-ROS parent class, and one for ROS child class
+const bool UEyeCamNodelet::DEFAULT_CAMERA_IS_MASTER = false;
 
 
 // Note that these default settings will be overwritten by queryCamParams() during connectCam()
@@ -146,6 +149,9 @@ void UEyeCamNodelet::onInit() {
 
   // Load camera-agnostic ROS parameters
   local_nh.param<string>("camera_name", cam_name_, DEFAULT_CAMERA_NAME);
+  local_nh.param<string>("camera_ready_service", camera_ready_service_, DEFAULT_CAMERA_READY_SERVICE);
+  local_nh.param<string>("camera_imu_topic", camera_imu_topic_, DEFAULT_CAMERA_IMU_TOPIC);
+  local_nh.param<bool>("camera_is_master", camera_is_master_, DEFAULT_CAMERA_IS_MASTER);
   local_nh.param<string>("frame_name", frame_name_, DEFAULT_FRAME_NAME);
   local_nh.param<string>("camera_topic", cam_topic_, DEFAULT_CAMERA_TOPIC);
   local_nh.param<string>("camera_topic_rect", cam_topic_rect_, DEFAULT_CAMERA_TOPIC_RECT);
@@ -171,10 +177,9 @@ void UEyeCamNodelet::onInit() {
   ros_rect_pub_ = it.advertise(cam_name_ + "/" + cam_topic_rect_, 1);
 
   //TODO:Create parameter for topics
-  ros_timestamp_sub_ = nh.subscribe("/mavros/cam_imu_sync/cam_imu_stamp", 1,
-                                        &UEyeCamNodelet::bufferTimestamp, this);
+  ros_timestamp_sub_ = nh.subscribe(camera_imu_topic_, 1, &UEyeCamNodelet::bufferTimestamp, this);
 
-  trigger_ready_srv_ = nh.serviceClient<std_srvs::Trigger>(cam_name_ + "/trigger_ready");
+  camera_ready_srv_client_ = nh.serviceClient<ueye_cam::CameraReady>(camera_ready_service_);
 
 
   set_cam_info_srv_ = nh.advertiseService(cam_name_ + "/set_camera_info",
@@ -211,6 +216,9 @@ void UEyeCamNodelet::onInit() {
 
   INFO_STREAM(
       "UEye camera [" << cam_name_ << "] initialized on topic " << ros_cam_pub_.getTopic() << endl <<
+      "Camera Ready Service:\t\t\t" << camera_ready_service_ << endl <<
+      "Camera Imu Topic:\t\t\t" << camera_imu_topic_ << endl <<
+      "Camera Is Master:\t\t\t" << (camera_is_master_ ? "true":"false")<< endl <<
       "Width:\t\t\t" << cam_params_.image_width << endl <<
       "Height:\t\t\t" << cam_params_.image_height << endl <<
       "Left Pos.:\t\t" << cam_params_.image_left << endl <<
@@ -1300,8 +1308,7 @@ void UEyeCamNodelet::publishImages(CameraSynchMessageContrainerPtr containerPtr)
 {
 
     //adjust the timestamp to one received from Pixhawk
-    containerPtr->cameraImagePtr->header.stamp.sec = containerPtr->cameraInfoPtr->header.stamp.sec = containerPtr->timeStampPtr->frame_stamp.sec;
-    containerPtr->cameraImagePtr->header.stamp.nsec = containerPtr->cameraInfoPtr->header.stamp.nsec = containerPtr->timeStampPtr->frame_stamp.nsec;
+    containerPtr->cameraImagePtr->header.stamp = containerPtr->cameraInfoPtr->header.stamp = containerPtr->timeStampPtr->frame_stamp;
 
     ros_cam_pub_.publish(containerPtr->cameraImagePtr, containerPtr->cameraInfoPtr);
 
@@ -1337,11 +1344,12 @@ void UEyeCamNodelet::publishImages(CameraSynchMessageContrainerPtr containerPtr)
 
 void UEyeCamNodelet::sendTriggerReady()
 {
-
-    continue from here
     ueye_cam::CameraReady sig;
+    sig.request.camera_name = cam_name_;
+    sig.request.frame_rate = cam_params_.frame_rate;
+    sig.request.is_master = camera_is_master_;
 
-    if(!trigger_ready_srv_.call(sig))
+    if(!camera_ready_srv_client_.call(sig))
     {
         ROS_ERROR("Failed to call ready-for-trigger");
     }

@@ -13,15 +13,15 @@ namespace ueye_cam {
     {
     public:
         CameraSynchMessageContrainer();
-         sensor_msgs::ImageConstPtr cameraImagePtr;
-         sensor_msgs::CameraInfoConstPtr cameraInfoPtr;
+         sensor_msgs::ImagePtr cameraImagePtr;
+         sensor_msgs::CameraInfoPtr cameraInfoPtr;
          mavros_msgs::CamIMUStampPtr timeStampPtr;
 
          void init(){
              ROS_DEBUG_STREAM("Creating instance of CameraSynchMessageContrainer");
          }
 
-        CameraSynchMessageContrainer( sensor_msgs::ImageConstPtr image,  sensor_msgs::CameraInfoConstPtr info)
+        CameraSynchMessageContrainer( sensor_msgs::ImagePtr image,  sensor_msgs::CameraInfoPtr info)
         {
             init();
             this->cameraImagePtr = image;

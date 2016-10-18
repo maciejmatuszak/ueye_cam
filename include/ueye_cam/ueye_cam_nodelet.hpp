@@ -61,6 +61,7 @@
 #include <image_geometry/pinhole_camera_model.h>
 #include "ueye_cam/camera_synch_message_contrainer.hpp"
 #include "ueye_cam/Exposure.h"
+#include "ueye_cam/CameraReady.h"
 
 
 namespace ueye_cam {
@@ -86,10 +87,13 @@ public:
 
   const static std::string DEFAULT_FRAME_NAME;
   const static std::string DEFAULT_CAMERA_NAME;
+  const static std::string DEFAULT_CAMERA_IMU_TOPIC;
+  const static std::string DEFAULT_CAMERA_READY_SERVICE;
   const static std::string DEFAULT_CAMERA_TOPIC;
   const static std::string DEFAULT_CAMERA_TOPIC_RECT;
   const static std::string DEFAULT_TIMEOUT_TOPIC;
   const static std::string DEFAULT_COLOR_MODE;
+  const static bool        DEFAULT_CAMERA_IS_MASTER;
 
 
   UEyeCamNodelet();
@@ -237,6 +241,7 @@ protected:
 
   std::map<unsigned int, CameraSynchMessageContrainerPtr> message_buffer_;
 
+  ros::ServiceClient camera_ready_srv_client_;
 
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;
