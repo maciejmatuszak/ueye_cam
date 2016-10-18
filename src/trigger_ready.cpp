@@ -38,6 +38,13 @@ namespace ueye_cam
             serverCameraReady_ = privateN_.advertiseService("camera_ready", &TriggerReady::servCameraReady, this);
         }
 
+        ~TriggerReady(){
+            if(errorCode_ != 0)
+            {
+                ROS_FATAL_STREAM("TriggerReady failed; error code:" << errorCode_);
+            }
+        }
+
         void parseCameraNames() {
             string parameter_string;
             if(privateN_.getParam("cameras", parameter_string))
@@ -57,7 +64,7 @@ namespace ueye_cam
             else
             {
                 ROS_FATAL("the parameter \"cameras has to be provided with spacce separated camera names\"");
-                exit(3);
+                exit(1);
             }
         }
 
@@ -69,54 +76,84 @@ namespace ueye_cam
          */
         bool servCameraReady(ueye_cam::CameraReady::Request &req, ueye_cam::CameraReady::Response &resp)
         {
-            map<string,bool>::iterator it = camera_status_.find(req.camera_name);
-            bool result = false;
-
-            algorithm need to be checked
+            //find camera with the name
+            map<string,bool>::iterator cameraEntryIt = camera_status_.find(req.camera_name);
+            string errormessage;
 
             //find the camera entry
-            if(it != camera_status_.end())
+            if(cameraEntryIt != camera_status_.end())
             {
                 //check for duplicate names
-                if(it->second == true)
+                //.first holds the key
+                //.second holds the value
+                if(cameraEntryIt->second == true)
                 {
                     //this camera is reporting ready for second time!!!
-                    ROS_FATAL_STREAM("Camera: " << req.camera_name << " was already processed. Possible two cameras with the same name?");
-                    result = false;
+                    errormessage = "Camera: " + req.camera_name + " was already processed. Possible two cameras with the same name?";
+
+                    ROS_FATAL_STREAM(errormessage);
+
+                    resp.success = false;
+                    resp.message = errormessage;
+
+                    errorCode_ = 2;
                 }
                 else
                 {
                     //if it is master camera then set the frequency
                     if(req.is_master)
                     {
+                        //check if master camera was already reporting
                         if(camera_master_set_)
                         {
-                            ROS_FATAL_STREAM("Camera: " << req.camera_name << " is reporting as master. You have more than one configured as master");
+                            errormessage = "Camera: " + req.camera_name + " is reporting as master. You have more than one configured as master";
+                            ROS_FATAL_STREAM(errormessage);
+
+                            resp.success = false;
+                            resp.message = errormessage;
+                            errorCode_ = 3;
                         }
-                        else
+                        else //all good - process master
                         {
-                            result = true;
+                            // mark camera as ready
+                            cameraEntryIt->second = true;
+
+                            //set the master camera flag
                             camera_master_set_= true;
+
+                            //update the frame rate if set
                             framerate_hz_ = req.frame_rate > 0.0 ? req.frame_rate : framerate_hz_;
-                            ROS_INFO_STREAM("Camera: " << req.camera_name << " is master setting framerate to: " << req.frame_rate << " [Hz]");
+
+                            ROS_INFO_STREAM("Camera: " << req.camera_name << " is master; Setting framerate to: " << req.frame_rate << " [Hz]");
+
+                            //mark response as success
+                            resp.success = true;
+
                         }
                     }
+                    else //non master cameras
+                    {
+                        //ok camera is ready, mark it as such
+                        cameraEntryIt->second = true;
 
-                    //ok camera is ready, mark it as such
-                    it->second = true;
-                    ROS_INFO_STREAM("Camera: " << req.camera_name << " is primed for trigger");
+                        //mark response as success
+                        resp.success = true;
+
+                        ROS_INFO_STREAM("Camera: " << req.camera_name << " is primed for trigger");
+                    }
                 }
-
             }
-            else
+            else // unknown camera
             {
-                //we do not know this camera
-                ROS_ERROR_STREAM("Camera: " << req.camera_name << " was not configred in the trigger");
-                resp.message = "Camera: " + req.camera_name + " was not configred in the trigger";
+                //we do not know this camera, we reply with error but not killing this instance
+                errormessage = "Camera: " + req.camera_name + " was not configred in the trigger";
+                ROS_ERROR_STREAM(errormessage);
+
+                resp.success = false;
+                resp.message = errormessage;
             }
 
-            resp.success = result;
-            return result;
+            return true;
         }
 
 
@@ -148,6 +185,9 @@ namespace ueye_cam
 
             triggerControlMsg_.request.cycle_time = enable ? (1000.0 / framerate_hz_) : 0.0;
             triggerControlMsg_.request.trigger_enable = enable;
+            ROS_INFO("Calling trigger control service: trigger_enable=%s; cycle_time=%f[ms]",
+                     (enable?"true":"false"),
+                     triggerControlMsg_.request.cycle_time);
 
             result = triggerControlClient_.call(triggerControlMsg_);
 
@@ -171,6 +211,10 @@ namespace ueye_cam
             }
         }
 
+        bool canContinue(){
+            return (ros::ok() && errorCode_ == 0);
+        }
+
 
     private:
 
@@ -180,6 +224,9 @@ namespace ueye_cam
         float framerate_hz_;
         map<string, bool> camera_status_;
         string triggerControlSrvName_;
+
+        // used for cimmunication between service callback to report error
+        int errorCode_ = 0;
 
         /**
          * unless you modified the PX4 Firmware you will not get reply from trigger control service
@@ -219,14 +266,14 @@ int main(int argc, char **argv)
 
 
     //for the start lets disable the wh trigger line
-    while (!tr.setTriggerControl(false) && ros::ok())
+    while (tr.canContinue() && !tr.setTriggerControl(false))
     {
         ROS_INFO_STREAM("Retrying reaching pixhawk");
         waiting_for_trigger_resonseRate.sleep();
     }
 
     //now lets wait for all cameras to report ready
-    while (!tr.allCamerasReady() && ros::ok())
+    while (tr.canContinue() && !tr.allCamerasReady())
     {
         ros::spinOnce();
         waiting_for_camerasRate.sleep();
@@ -234,10 +281,9 @@ int main(int argc, char **argv)
 
     // All cameras are ready - fire
     // Send start trigger command to Pixhawk
-    while (!tr.setTriggerControl(true) && ros::ok())
+    while (tr.canContinue() && !tr.setTriggerControl(true))
     {
         ROS_INFO_STREAM("Retrying reaching pixhawk");
         waiting_for_trigger_resonseRate.sleep();
-    }
-
+    }    
 }
