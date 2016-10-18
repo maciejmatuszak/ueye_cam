@@ -59,6 +59,8 @@
 #include <boost/thread/mutex.hpp>
 #include <ueye_cam/ueye_cam_driver.hpp>
 #include <image_geometry/pinhole_camera_model.h>
+#include "ueye_cam/camera_synch_message_contrainer.hpp"
+#include "ueye_cam/Exposure.h"
 
 
 namespace ueye_cam {
@@ -77,7 +79,7 @@ public:
   constexpr static unsigned int RECONFIGURE_CLOSE = 3;
   constexpr static int DEFAULT_IMAGE_WIDTH = 640;  // NOTE: these default values do not matter, as they
   constexpr static int DEFAULT_IMAGE_HEIGHT = 480; // are overwritten by queryCamParams() during connectCam()
-  constexpr static double DEFAULT_EXPOSURE = 33.0;
+  constexpr static double DEFAULT_EXPOSURE = 10.0;
   constexpr static double DEFAULT_FRAME_RATE = 10.0;
   constexpr static int DEFAULT_PIXEL_CLOCK = 25;
   constexpr static int DEFAULT_FLASH_DURATION = 1000;
@@ -175,9 +177,30 @@ protected:
   ros::Time getImageTimestamp();
 
   /**
-    * Image rectification
-    */
-  void publishRectifiedImage(const sensor_msgs::ImageConstPtr imagePtr);
+   * @brief setSlaveExposure
+   * @param msg
+   */
+  void setSlaveExposure(const ueye_cam::Exposure& msg);
+
+  /**
+   * @brief sendTriggerReady
+   */
+  void sendTriggerReady();
+
+  /**
+   * @brief sendSlaveExposure
+   */
+  void sendSlaveExposure();
+
+  /**
+   * @brief processAndPublish
+   * @param containerptr
+   */
+  void bufferTimestamp(const mavros_msgs::CamIMUStampPtr& msg);
+  void bufferImages(sensor_msgs::CameraInfoPtr cam_info_msg_ptr, sensor_msgs::ImagePtr img_msg_ptr);
+  void publishImages(CameraSynchMessageContrainerPtr containerptr);
+
+  void trim_message_buffer();
 
 
   /**
@@ -196,6 +219,24 @@ protected:
 
   image_transport::CameraPublisher ros_cam_pub_;
   image_transport::Publisher ros_rect_pub_;
+
+  /**
+   * @brief ros_exposure_pub_ publishes exposure details for slave cameras
+   */
+  ros::Publisher ros_exposure_pub_;
+
+  /**
+   * @brief ros_exposure_sub_ slave cameras subscribe for exposure details from master
+   */
+  ros::Subscriber ros_exposure_sub_;
+
+  /**
+   * @brief ros_timestamp_sub_ subscriber for time synch messages from mavros (Pixhawk / PX4)
+   */
+  ros::Subscriber ros_timestamp_sub_;
+
+  std::map<unsigned int, CameraSynchMessageContrainerPtr> message_buffer_;
+
 
   sensor_msgs::Image ros_image_;
   sensor_msgs::CameraInfo ros_cam_info_;

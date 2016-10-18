@@ -46,6 +46,7 @@
 *******************************************************************************/
 
 #include "ueye_cam/ueye_cam_nodelet.hpp"
+#include "ueye_cam/CameraReady.h"
 #include <cstdlib> // needed for getenv()
 #include <ros/package.h>
 #include <camera_calibration_parsers/parse.h>
@@ -125,6 +126,7 @@ UEyeCamNodelet::UEyeCamNodelet():
 
 
 UEyeCamNodelet::~UEyeCamNodelet() {
+  message_buffer_.clear();
   disconnectCam();
 
   // NOTE: sometimes deleting dynamic reconfigure object will lock up
@@ -168,6 +170,13 @@ void UEyeCamNodelet::onInit() {
   ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 1);
   ros_rect_pub_ = it.advertise(cam_name_ + "/" + cam_topic_rect_, 1);
 
+  //TODO:Create parameter for topics
+  ros_timestamp_sub_ = nh.subscribe("/mavros/cam_imu_sync/cam_imu_stamp", 1,
+                                        &UEyeCamNodelet::bufferTimestamp, this);
+
+  trigger_ready_srv_ = nh.serviceClient<std_srvs::Trigger>(cam_name_ + "/trigger_ready");
+
+
   set_cam_info_srv_ = nh.advertiseService(cam_name_ + "/set_camera_info",
       &UEyeCamNodelet::setCamInfo, this);
   timeout_pub_ = nh.advertise<std_msgs::UInt64>(cam_name_ + "/" + timeout_topic_, 1, true);
@@ -180,7 +189,26 @@ void UEyeCamNodelet::onInit() {
   }
 
   ros_cfg_->setCallback(f); // this will call configCallback, which will configure the camera's parameters
+
+  if(cam_params_.ext_trigger_mode)
+  {
+      if(setExtTriggerMode() != IS_SUCCESS)
+      {
+          ERROR_STREAM("Setting trigger mode failed for [" << cam_name_ << "]");
+          ros::shutdown();
+          return;
+      }
+
+      INFO_STREAM("[" << cam_name_ << "] set to external trigger mode");
+  }
+
+
+
   startFrameGrabber();
+
+  // Start IMU-camera trigger
+  sendTriggerReady();
+
   INFO_STREAM(
       "UEye camera [" << cam_name_ << "] initialized on topic " << ros_cam_pub_.getTopic() << endl <<
       "Width:\t\t\t" << cam_params_.image_width << endl <<
@@ -893,6 +921,7 @@ bool UEyeCamNodelet::setCamInfo(sensor_msgs::SetCameraInfo::Request& req,
 }
 
 
+
 void UEyeCamNodelet::frameGrabLoop() {
 #ifdef DEBUG_PRINTOUT_FRAME_GRAB_RATES
   ros::Time prevStartGrab = ros::Time::now();
@@ -916,6 +945,8 @@ void UEyeCamNodelet::frameGrabLoop() {
   while (frame_grab_alive_ && ros::ok()) {
     // Initialize live video mode if camera was previously asleep, and ROS image topic has subscribers;
     // and stop live video mode if ROS image topic no longer has any subscribers
+    //ROS_DEBUG("Number of subscribers; image: %d; rect image: %d;", ros_cam_pub_.getNumSubscribers(), ros_rect_pub_.getNumSubscribers());
+
     currNumSubscribers = ros_cam_pub_.getNumSubscribers() + ros_rect_pub_.getNumSubscribers();
     if (currNumSubscribers > 0 && prevNumSubscribers <= 0) {
       // Reset reference time to prevent throttling first frame
@@ -1051,15 +1082,15 @@ void UEyeCamNodelet::frameGrabLoop() {
 
         if (!frame_grab_alive_ || !ros::ok()) break;
 
-        ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
-        publishRectifiedImage(img_msg_ptr);
+        bufferImages(cam_info_msg_ptr, img_msg_ptr);
 
-      }
-    }
+
+      } //if(processNextFrame(eventTimeout) != NULL)
+    } //if (isCapturing())
 
     if (!frame_grab_alive_ || !ros::ok()) break;
     idleDelay.sleep();
-  }
+  } //while (frame_grab_alive_ && ros::ok()) {
 
   setStandbyMode();
   frame_grab_alive_ = false;
@@ -1200,8 +1231,80 @@ void UEyeCamNodelet::handleTimeout() {
   timeout_pub_.publish(timeout_msg);
 }
 
-void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::ImageConstPtr imagePtr)
+void UEyeCamNodelet::trim_message_buffer()
 {
+    for(map<unsigned int, CameraSynchMessageContrainerPtr>::iterator it = message_buffer_.begin(); it != message_buffer_.end();)
+    {
+        if(ros_frame_count_ - it->first > 30)
+        {
+            message_buffer_.erase(it++); // Note the post increment here.
+                                         // This increments 'it' and returns a copy of
+                                         // the original 'it' to be used by erase()
+        }
+        else
+        {
+            ++it;  // Use Pre-Increment here as it is more effecient
+                   // Because no copy of it is required.
+        }
+    }
+}
+
+void UEyeCamNodelet::bufferImages(sensor_msgs::CameraInfoPtr cam_info_msg_ptr, sensor_msgs::ImagePtr img_msg_ptr)
+{
+    std::map<unsigned int, CameraSynchMessageContrainerPtr>::iterator it = message_buffer_.find(img_msg_ptr->header.seq);
+    if(it == message_buffer_.end())
+    {
+        ROS_DEBUG_STREAM("bufferImages; new  ; seq: " << img_msg_ptr->header.seq);
+        // there is no timnestamp yet
+        CameraSynchMessageContrainerPtr entryPtr(new CameraSynchMessageContrainer(img_msg_ptr, cam_info_msg_ptr));
+        message_buffer_[img_msg_ptr->header.seq] = entryPtr;
+    }
+    else // timesynch exists
+    {
+        ROS_DEBUG_STREAM("bufferImages; exist; seq: " << img_msg_ptr->header.seq);
+        CameraSynchMessageContrainerPtr containerPtr = it->second;
+        containerPtr->cameraImagePtr = img_msg_ptr;
+        containerPtr->cameraInfoPtr = cam_info_msg_ptr;
+        publishImages(containerPtr);
+
+    }
+
+    //trim_message_buffer();
+}
+
+void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStampPtr& timeStampPtr)
+{
+    std::map<unsigned int, CameraSynchMessageContrainerPtr>::iterator it = message_buffer_.find(timeStampPtr->frame_seq_id);
+    if(it == message_buffer_.end())
+    {
+        // there is no timnestamp yet
+        ROS_DEBUG_STREAM("bufferTimestamp; new  ; seq: " << timeStampPtr->frame_seq_id);
+        CameraSynchMessageContrainerPtr entryPtr(new CameraSynchMessageContrainer( timeStampPtr));
+        message_buffer_[timeStampPtr->frame_seq_id] = entryPtr;
+
+    }
+    else // timesynch exists
+    {
+        ROS_DEBUG_STREAM("bufferTimestamp; exist; seq: " << timeStampPtr->frame_seq_id);
+        CameraSynchMessageContrainerPtr containerPtr = it->second;
+        containerPtr->timeStampPtr = timeStampPtr;
+        publishImages(containerPtr);
+
+    }
+
+    //trim_message_buffer();
+}
+
+
+void UEyeCamNodelet::publishImages(CameraSynchMessageContrainerPtr containerPtr)
+{
+
+    //adjust the timestamp to one received from Pixhawk
+    containerPtr->cameraImagePtr->header.stamp.sec = containerPtr->cameraInfoPtr->header.stamp.sec = containerPtr->timeStampPtr->frame_stamp.sec;
+    containerPtr->cameraImagePtr->header.stamp.nsec = containerPtr->cameraInfoPtr->header.stamp.nsec = containerPtr->timeStampPtr->frame_stamp.nsec;
+
+    ros_cam_pub_.publish(containerPtr->cameraImagePtr, containerPtr->cameraInfoPtr);
+
     //We can not run without camera info intrinsics
     if(!camera_model_.initialized()){
         //lets be polite and tell the user something is wrong
@@ -1216,7 +1319,7 @@ void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::ImageConstPtr imag
     cv_bridge::CvImagePtr cv_ptr;
     //we need CV version of an image...
     try {
-        cv_ptr = cv_bridge::toCvCopy(*imagePtr, imagePtr->encoding);
+        cv_ptr = cv_bridge::toCvCopy(*containerPtr->cameraImagePtr, containerPtr->cameraImagePtr->encoding);
 
     } catch (cv_bridge::Exception &e) {
         ROS_ERROR("cv_bridge exception: %s", e.what());
@@ -1228,8 +1331,20 @@ void UEyeCamNodelet::publishRectifiedImage(const sensor_msgs::ImageConstPtr imag
     camera_model_.rectifyImage(cv_ptr->image, frame_rect, cv::INTER_LINEAR);
 
     // Publish rectified image
-    sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(imagePtr->header, imagePtr->encoding, frame_rect).toImageMsg();
+    sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(containerPtr->cameraImagePtr->header, containerPtr->cameraImagePtr->encoding, frame_rect).toImageMsg();
     ros_rect_pub_.publish(rect_msg);
+}
+
+void UEyeCamNodelet::sendTriggerReady()
+{
+
+    continue from here
+    ueye_cam::CameraReady sig;
+
+    if(!trigger_ready_srv_.call(sig))
+    {
+        ROS_ERROR("Failed to call ready-for-trigger");
+    }
 }
 
 

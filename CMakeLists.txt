@@ -74,6 +74,7 @@ set(UEYECAM_NODELET_SOURCES
 
 set(UEYECAM_NODELET_HEADERS
   include/ueye_cam/ueye_cam_nodelet.hpp
+  include/ueye_cam/camera_synch_message_contrainer.hpp
 )
 
 add_message_files(DIRECTORY msg
