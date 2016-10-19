@@ -946,11 +946,12 @@ void UEyeCamNodelet::frameGrabLoop() {
 
   DEBUG_STREAM("Starting threaded frame grabber loop for [" << cam_name_ << "]");
 
-  ros::Rate idleDelay(200);
+  ros::Rate idleDelay(500);
 
   int prevNumSubscribers = 0;
   int currNumSubscribers = 0;
   while (frame_grab_alive_ && ros::ok()) {
+try{
     // Initialize live video mode if camera was previously asleep, and ROS image topic has subscribers;
     // and stop live video mode if ROS image topic no longer has any subscribers
     //ROS_DEBUG("Number of subscribers; image: %d; rect image: %d;", ros_cam_pub_.getNumSubscribers(), ros_rect_pub_.getNumSubscribers());
@@ -1098,6 +1099,12 @@ void UEyeCamNodelet::frameGrabLoop() {
 
     if (!frame_grab_alive_ || !ros::ok()) break;
     idleDelay.sleep();
+  }
+  catch(std::exception &e)
+  {
+      ROS_FATAL_STREAM ("Failed in while loopp: " << e.what());
+  }
+
   } //while (frame_grab_alive_ && ros::ok()) {
 
   setStandbyMode();
@@ -1159,12 +1166,12 @@ bool UEyeCamNodelet::fillMsgData(sensor_msgs::Image& img) const {
   img.step = img.width * sensor_msgs::image_encodings::numChannels(img.encoding) * sensor_msgs::image_encodings::bitDepth(img.encoding)/8;
   img.data.resize(img.height * img.step);
 
-  DEBUG_STREAM("Allocated ROS image buffer for [" << cam_name_ << "]:" <<
-      "\n  size: " << cam_buffer_size_ <<
-      "\n  width: " << img.width <<
-      "\n  height: " << img.height <<
-      "\n  step: " << img.step <<
-      "\n  encoding: " << img.encoding);
+  //DEBUG_STREAM("Allocated ROS image buffer for [" << cam_name_ << "]:" <<
+  //    "\n  size: " << cam_buffer_size_ <<
+  //    "\n  width: " << img.width <<
+  //    "\n  height: " << img.height <<
+  //    "\n  step: " << img.step <<
+  //    "\n  encoding: " << img.encoding);
 
   const std::function<void*(void*, void*, size_t)> unpackCopy = getUnpackCopyFunc(color_mode_);
 
@@ -1241,9 +1248,10 @@ void UEyeCamNodelet::handleTimeout() {
 
 void UEyeCamNodelet::trim_message_buffer()
 {
-    for(map<unsigned int, CameraSynchMessageContrainerPtr>::iterator it = message_buffer_.begin(); it != message_buffer_.end();)
+    message_buffer_mutex_.lock();
+    for(map<unsigned int, CameraSynchMessageContainerPtr>::iterator it = message_buffer_.begin(); it != message_buffer_.end();)
     {
-        if(ros_frame_count_ - it->first > 30)
+        if((ros_frame_count_ - it->first) > 5)
         {
             message_buffer_.erase(it++); // Note the post increment here.
                                          // This increments 'it' and returns a copy of
@@ -1255,75 +1263,106 @@ void UEyeCamNodelet::trim_message_buffer()
                    // Because no copy of it is required.
         }
     }
+    message_buffer_mutex_.unlock();
 }
 
 void UEyeCamNodelet::bufferImages(sensor_msgs::CameraInfoPtr cam_info_msg_ptr, sensor_msgs::ImagePtr img_msg_ptr)
 {
-    std::map<unsigned int, CameraSynchMessageContrainerPtr>::iterator it = message_buffer_.find(img_msg_ptr->header.seq);
+
+    CameraSynchMessageContainerPtr entryPtr;
+
+    message_buffer_mutex_.lock();
+    std::map<unsigned int, CameraSynchMessageContainerPtr>::iterator it = message_buffer_.find(img_msg_ptr->header.seq);
     if(it == message_buffer_.end())
     {
-        ROS_DEBUG_STREAM("bufferImages; new  ; seq: " << img_msg_ptr->header.seq);
+        //ROS_DEBUG_STREAM("bufferImages; new  ; seq: " << img_msg_ptr->header.seq);
         // there is no timnestamp yet
-        CameraSynchMessageContrainerPtr entryPtr(new CameraSynchMessageContrainer(img_msg_ptr, cam_info_msg_ptr));
+        entryPtr = boost::make_shared<CameraSynchMessageContainer>(img_msg_ptr, cam_info_msg_ptr);
         message_buffer_[img_msg_ptr->header.seq] = entryPtr;
     }
     else // timesynch exists
     {
-        ROS_DEBUG_STREAM("bufferImages; exist; seq: " << img_msg_ptr->header.seq);
-        CameraSynchMessageContrainerPtr containerPtr = it->second;
-        containerPtr->cameraImagePtr = img_msg_ptr;
-        containerPtr->cameraInfoPtr = cam_info_msg_ptr;
-        publishImages(containerPtr);
+        //ROS_DEBUG_STREAM("bufferImages; exist; seq: " << img_msg_ptr->header.seq);
+        entryPtr = it->second;
 
     }
+    entryPtr->cameraImagePtr = img_msg_ptr;
+    entryPtr->cameraInfoPtr = cam_info_msg_ptr;
+    message_buffer_mutex_.unlock();
 
-    //trim_message_buffer();
+
+    if(entryPtr->isComplette())
+    {
+        publishImages(entryPtr);
+    }
+
+    trim_message_buffer();
 }
 
 void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStampPtr& timeStampPtr)
 {
-    std::map<unsigned int, CameraSynchMessageContrainerPtr>::iterator it = message_buffer_.find(timeStampPtr->frame_seq_id);
+    CameraSynchMessageContainerPtr entryPtr;
+
+    message_buffer_mutex_.lock();
+    std::map<unsigned int, CameraSynchMessageContainerPtr>::iterator it = message_buffer_.find(timeStampPtr->frame_seq_id);
     if(it == message_buffer_.end())
     {
         // there is no timnestamp yet
-        ROS_DEBUG_STREAM("bufferTimestamp; new  ; seq: " << timeStampPtr->frame_seq_id);
-        CameraSynchMessageContrainerPtr entryPtr(new CameraSynchMessageContrainer( timeStampPtr));
+        //ROS_DEBUG_STREAM("bufferTimestamp; new  ; seq: " << timeStampPtr->frame_seq_id);
+        entryPtr = boost::make_shared<CameraSynchMessageContainer>(timeStampPtr);
         message_buffer_[timeStampPtr->frame_seq_id] = entryPtr;
 
     }
     else // timesynch exists
     {
-        ROS_DEBUG_STREAM("bufferTimestamp; exist; seq: " << timeStampPtr->frame_seq_id);
-        CameraSynchMessageContrainerPtr containerPtr = it->second;
-        containerPtr->timeStampPtr = timeStampPtr;
-        publishImages(containerPtr);
+        //ROS_DEBUG_STREAM("bufferTimestamp; exist; seq: " << timeStampPtr->frame_seq_id);
+        CameraSynchMessageContainerPtr containerPtr = it->second;
+
 
     }
 
-    //trim_message_buffer();
+    entryPtr->timeStampPtr = timeStampPtr;
+
+    message_buffer_mutex_.unlock();
+
+    if(entryPtr->isComplette())
+    {
+        publishImages(entryPtr);
+    }
+    trim_message_buffer();
 }
 
 
-void UEyeCamNodelet::publishImages(CameraSynchMessageContrainerPtr containerPtr)
+void UEyeCamNodelet::publishImages(CameraSynchMessageContainerPtr containerPtr)
 {
 
+    //ROS_DEBUG_STREAM("publishImages; seq: " << containerPtr->cameraImagePtr->header.seq <<
+    //                 "; Old Time:" << std::setprecision (15)<< containerPtr->cameraImagePtr->header.stamp.toSec() <<
+    //                 "; new: " <<  containerPtr->timeStampPtr->frame_stamp.toSec());
     //adjust the timestamp to one received from Pixhawk
     containerPtr->cameraImagePtr->header.stamp = containerPtr->cameraInfoPtr->header.stamp = containerPtr->timeStampPtr->frame_stamp;
 
+
+    //ROS_DEBUG_STREAM("publishImages:publishing image_raw");
     ros_cam_pub_.publish(containerPtr->cameraImagePtr, containerPtr->cameraInfoPtr);
 
-    //We can not run without camera info intrinsics
-    if(!camera_model_.initialized()){
-        //lets be polite and tell the user something is wrong
-        if(ros_rect_pub_.getNumSubscribers() > 0)
-        {
-            ROS_WARN_ONCE("A node subscribed to rectified image topic but no camera info was configured!!! No image will be published");
-        }
 
+    if(ros_rect_pub_.getNumSubscribers() == 0)
+    {
         return;
     }
 
+    //We can not run without camera info intrinsics
+    if(!camera_model_.initialized())
+    {
+        //lets be polite and tell the user something is wrong
+        ROS_WARN_ONCE("A node subscribed to rectified image topic but no camera info was configured!!! No image will be published");
+        return;
+    }
+
+
     cv_bridge::CvImagePtr cv_ptr;
+    //ROS_DEBUG_STREAM("publishImages: making opencv copy...");
     //we need CV version of an image...
     try {
         cv_ptr = cv_bridge::toCvCopy(*containerPtr->cameraImagePtr, containerPtr->cameraImagePtr->encoding);
@@ -1335,9 +1374,11 @@ void UEyeCamNodelet::publishImages(CameraSynchMessageContrainerPtr containerPtr)
 
     // Rectify image
     cv::Mat frame_rect;
+    //ROS_DEBUG_STREAM("publishImages: rectification...");
     camera_model_.rectifyImage(cv_ptr->image, frame_rect, cv::INTER_LINEAR);
 
     // Publish rectified image
+    //ROS_DEBUG_STREAM("publishImages: publishing rectified...");
     sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage(containerPtr->cameraImagePtr->header, containerPtr->cameraImagePtr->encoding, frame_rect).toImageMsg();
     ros_rect_pub_.publish(rect_msg);
 }

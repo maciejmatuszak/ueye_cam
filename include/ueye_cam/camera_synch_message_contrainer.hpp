@@ -9,41 +9,33 @@
 namespace ueye_cam {
 
 
-    class CameraSynchMessageContrainer
+    class CameraSynchMessageContainer
     {
     public:
-        CameraSynchMessageContrainer();
-         sensor_msgs::ImagePtr cameraImagePtr;
-         sensor_msgs::CameraInfoPtr cameraInfoPtr;
-         mavros_msgs::CamIMUStampPtr timeStampPtr;
+        CameraSynchMessageContainer();
+        sensor_msgs::ImagePtr cameraImagePtr;
+        sensor_msgs::CameraInfoPtr cameraInfoPtr;
+        mavros_msgs::CamIMUStampPtr timeStampPtr;
 
-         void init(){
-             ROS_DEBUG_STREAM("Creating instance of CameraSynchMessageContrainer");
-         }
-
-        CameraSynchMessageContrainer( sensor_msgs::ImagePtr image,  sensor_msgs::CameraInfoPtr info)
+        CameraSynchMessageContainer(sensor_msgs::ImagePtr cameraImagePtr,  sensor_msgs::CameraInfoPtr cameraInfoPtr)
         {
-            init();
-            this->cameraImagePtr = image;
-            this->cameraInfoPtr = info;
-            this->timeStampPtr = nullptr;
+            this->cameraImagePtr = cameraImagePtr;
+            this->cameraInfoPtr = cameraInfoPtr;
         }
 
-        CameraSynchMessageContrainer( mavros_msgs::CamIMUStampPtr timestampPtr)
+        CameraSynchMessageContainer(mavros_msgs::CamIMUStampPtr timeStampPtr)
         {
-            init();
-            this->cameraImagePtr = nullptr;
-            this->cameraInfoPtr = nullptr;
-            this->timeStampPtr = timestampPtr;
+            this->timeStampPtr = timeStampPtr;
         }
-        ~CameraSynchMessageContrainer()
+
+        bool isComplette()
         {
-            ROS_DEBUG_STREAM("Disposing of CameraSynchMessageContrainer");
+            return (cameraImagePtr != nullptr && timeStampPtr != nullptr);
         }
     };
 
 
-    typedef boost::shared_ptr<CameraSynchMessageContrainer> CameraSynchMessageContrainerPtr;
-    typedef boost::shared_ptr<CameraSynchMessageContrainer const> CameraSynchMessageContrainerConstPtr;
+    typedef boost::shared_ptr<CameraSynchMessageContainer> CameraSynchMessageContainerPtr;
+    typedef boost::shared_ptr<CameraSynchMessageContainer const> CameraSynchMessageContainerConstPtr;
 }
 #endif // CAMERASYNCHMESSAGECONTRAINER_H

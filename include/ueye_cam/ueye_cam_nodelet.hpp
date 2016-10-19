@@ -202,7 +202,7 @@ protected:
    */
   void bufferTimestamp(const mavros_msgs::CamIMUStampPtr& msg);
   void bufferImages(sensor_msgs::CameraInfoPtr cam_info_msg_ptr, sensor_msgs::ImagePtr img_msg_ptr);
-  void publishImages(CameraSynchMessageContrainerPtr containerptr);
+  void publishImages(CameraSynchMessageContainerPtr containerptr);
 
   void trim_message_buffer();
 
@@ -239,7 +239,8 @@ protected:
    */
   ros::Subscriber ros_timestamp_sub_;
 
-  std::map<unsigned int, CameraSynchMessageContrainerPtr> message_buffer_;
+  std::map<unsigned int, CameraSynchMessageContainerPtr> message_buffer_;
+    boost::mutex message_buffer_mutex_;
 
   ros::ServiceClient camera_ready_srv_client_;
 
@@ -269,6 +270,7 @@ protected:
   ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
   uint64_t prev_output_frame_idx_; // see init_publish_time_
   boost::mutex output_rate_mutex_;
+
 };
 
 
