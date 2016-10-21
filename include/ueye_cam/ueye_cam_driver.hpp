@@ -464,9 +464,6 @@ protected:
   INT cam_buffer_pitch_;
   unsigned int cam_buffer_size_;
   std::string cam_name_;
-  std::string camera_ready_service_;
-  std::string camera_imu_topic_;
-  bool camera_is_master_;
   int cam_id_;
   IS_RECT cam_aoi_;
   unsigned int cam_subsampling_rate_;

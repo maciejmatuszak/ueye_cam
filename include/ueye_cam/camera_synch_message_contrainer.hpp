@@ -17,13 +17,13 @@ namespace ueye_cam {
         sensor_msgs::CameraInfoPtr cameraInfoPtr;
         mavros_msgs::CamIMUStampPtr timeStampPtr;
 
-        CameraSynchMessageContainer(sensor_msgs::ImagePtr cameraImagePtr,  sensor_msgs::CameraInfoPtr cameraInfoPtr)
+        CameraSynchMessageContainer(const sensor_msgs::ImagePtr& cameraImagePtr,  const sensor_msgs::CameraInfoPtr& cameraInfoPtr)
         {
             this->cameraImagePtr = cameraImagePtr;
             this->cameraInfoPtr = cameraInfoPtr;
         }
 
-        CameraSynchMessageContainer(mavros_msgs::CamIMUStampPtr timeStampPtr)
+        CameraSynchMessageContainer(const mavros_msgs::CamIMUStampPtr& timeStampPtr)
         {
             this->timeStampPtr = timeStampPtr;
         }

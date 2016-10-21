@@ -94,6 +94,7 @@ public:
   const static std::string DEFAULT_TIMEOUT_TOPIC;
   const static std::string DEFAULT_COLOR_MODE;
   const static bool        DEFAULT_CAMERA_IS_MASTER;
+  const static bool        DEFAULT_USE_EXTERNAL_TIMESTAMP;
 
 
   UEyeCamNodelet();
@@ -201,8 +202,9 @@ protected:
    * @param containerptr
    */
   void bufferTimestamp(const mavros_msgs::CamIMUStampPtr& msg);
-  void bufferImages(sensor_msgs::CameraInfoPtr cam_info_msg_ptr, sensor_msgs::ImagePtr img_msg_ptr);
-  void publishImages(CameraSynchMessageContainerPtr containerptr);
+  void bufferImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr);
+  void publishImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr);
+  void adjustTimeStampAndPublishImages(const CameraSynchMessageContainerPtr& containerPtr);
 
   void trim_message_buffer();
 
@@ -270,6 +272,11 @@ protected:
   ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
   uint64_t prev_output_frame_idx_; // see init_publish_time_
   boost::mutex output_rate_mutex_;
+  std::string camera_ready_service_;
+  std::string camera_imu_topic_;
+  bool camera_is_master_;
+  bool use_external_timestamp_;
+
 
 };
 
