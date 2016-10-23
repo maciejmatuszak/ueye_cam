@@ -57,6 +57,7 @@
 #include <sensor_msgs/SetCameraInfo.h>
 #include <ueye_cam/UEyeCamConfig.h>
 #include <boost/thread/mutex.hpp>
+#include <boost/thread/lock_guard.hpp>
 #include <ueye_cam/ueye_cam_driver.hpp>
 #include <image_geometry/pinhole_camera_model.h>
 #include "ueye_cam/camera_synch_message_contrainer.hpp"
@@ -95,6 +96,8 @@ public:
   const static std::string DEFAULT_COLOR_MODE;
   const static bool        DEFAULT_CAMERA_IS_MASTER;
   const static bool        DEFAULT_USE_EXTERNAL_TIMESTAMP;
+  const static bool        DEFAULT_SYNCH_TIMESTAMP_ALWAYS_FIRST;
+
 
 
   UEyeCamNodelet();
@@ -276,8 +279,10 @@ protected:
   std::string camera_imu_topic_;
   bool camera_is_master_;
   bool use_external_timestamp_;
-
-
+  bool synch_timestamp_always_first_;
+  CameraSynchMessageContainerPtr synch_timestamp_always_first_containerPtr;
+  ros::Time lastImageTimeStamp_;
+  unsigned int lastImuTimeStampSeq;
 };
 
 

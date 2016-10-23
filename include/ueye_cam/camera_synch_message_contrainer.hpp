@@ -12,12 +12,19 @@ namespace ueye_cam {
     class CameraSynchMessageContainer
     {
     public:
-        CameraSynchMessageContainer();
+
         sensor_msgs::ImagePtr cameraImagePtr;
         sensor_msgs::CameraInfoPtr cameraInfoPtr;
-        mavros_msgs::CamIMUStampPtr timeStampPtr;
+        unsigned int timeStampFrameSeq;
+        ros::Time timeStampTimestamp;
 
-        CameraSynchMessageContainer(const sensor_msgs::ImagePtr& cameraImagePtr,  const sensor_msgs::CameraInfoPtr& cameraInfoPtr)
+        CameraSynchMessageContainer():timeStampTimestamp(0,0)
+        {
+
+        }
+
+        CameraSynchMessageContainer(const sensor_msgs::ImagePtr& cameraImagePtr,  const sensor_msgs::CameraInfoPtr& cameraInfoPtr):
+            timeStampTimestamp(0,0)
         {
             this->cameraImagePtr = cameraImagePtr;
             this->cameraInfoPtr = cameraInfoPtr;
@@ -25,12 +32,28 @@ namespace ueye_cam {
 
         CameraSynchMessageContainer(const mavros_msgs::CamIMUStampPtr& timeStampPtr)
         {
-            this->timeStampPtr = timeStampPtr;
+            updateCamIMUStamp(timeStampPtr);
+        }
+
+        void updateCamIMUStamp(const mavros_msgs::CamIMUStampPtr& timeStampPtr)
+        {
+            this->timeStampTimestamp.sec = timeStampPtr->frame_stamp.sec;
+            this->timeStampTimestamp.nsec = timeStampPtr->frame_stamp.nsec;
+            this->timeStampFrameSeq = timeStampPtr->frame_seq_id;
+        }
+
+        void reset()
+        {
+            this->timeStampTimestamp.sec = 0;
+            this->timeStampTimestamp.nsec = 0;
+            this->timeStampFrameSeq = 0;
+            this->cameraImagePtr = nullptr;
+            this->cameraInfoPtr = nullptr;
         }
 
         bool isComplette()
         {
-            return (cameraImagePtr != nullptr && timeStampPtr != nullptr);
+            return (cameraImagePtr != nullptr && !timeStampTimestamp.isZero());
         }
     };
 
