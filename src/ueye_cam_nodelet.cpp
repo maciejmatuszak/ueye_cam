@@ -76,8 +76,7 @@ const std::string UEyeCamNodelet::DEFAULT_CAMERA_TOPIC_RECT = "image_rect";
 const std::string UEyeCamNodelet::DEFAULT_TIMEOUT_TOPIC = "timeout_count";
 const std::string UEyeCamNodelet::DEFAULT_COLOR_MODE = "";
 const bool UEyeCamNodelet::DEFAULT_CAMERA_IS_MASTER = false;
-const bool UEyeCamNodelet::DEFAULT_USE_EXTERNAL_TIMESTAMP = false;
-const bool UEyeCamNodelet::DEFAULT_SYNCH_TIMESTAMP_ALWAYS_FIRST = false;
+const unsigned int UEyeCamNodelet::DEFAULT_TIME_SYNCH_METHOD = 0; //TimeSynchMethod_None;
 
 constexpr int UEyeCamDriver::ANY_CAMERA; // Needed since CMakeLists.txt creates 2 separate libraries: one for non-ROS parent class, and one for ROS child class
 
@@ -158,8 +157,20 @@ void UEyeCamNodelet::onInit() {
   local_nh.param<string>("camera_ready_service", camera_ready_service_, DEFAULT_CAMERA_READY_SERVICE);
   local_nh.param<string>("camera_imu_topic", camera_imu_topic_, DEFAULT_CAMERA_IMU_TOPIC);
   local_nh.param<bool>("camera_is_master", camera_is_master_, DEFAULT_CAMERA_IS_MASTER);
-  local_nh.param<bool>("use_external_timestamp", use_external_timestamp_, DEFAULT_USE_EXTERNAL_TIMESTAMP);
-  local_nh.param<bool>("synch_timeout_always_first", synch_timestamp_always_first_, DEFAULT_SYNCH_TIMESTAMP_ALWAYS_FIRST);
+
+  int temp_method = -5;
+
+  local_nh.param<int>("time_synch_method", temp_method, DEFAULT_TIME_SYNCH_METHOD);
+
+  if(temp_method >= 0 && temp_method <= 2)
+  {
+    time_synch_method_ = (TimeSynchMethod)temp_method;
+  }
+  else
+  {
+      ROS_FATAL_STREAM("Invalid value for time_synch_method: " << temp_method);
+  }
+
   local_nh.param<string>("frame_name", frame_name_, DEFAULT_FRAME_NAME);
   local_nh.param<string>("camera_topic", cam_topic_, DEFAULT_CAMERA_TOPIC);
   local_nh.param<string>("camera_topic_rect", cam_topic_rect_, DEFAULT_CAMERA_TOPIC_RECT);
@@ -184,8 +195,10 @@ void UEyeCamNodelet::onInit() {
   ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 1);
   ros_rect_pub_ = it.advertise(cam_name_ + "/" + cam_topic_rect_, 1);
 
-  //TODO:Create parameter for topics
-  ros_timestamp_sub_ = nh.subscribe(camera_imu_topic_, 1, &UEyeCamNodelet::bufferTimestamp, this);
+  if(time_synch_method_ != TimeSynchMethod_None)
+  {
+    ros_timestamp_sub_ = nh.subscribe(camera_imu_topic_, 1, &UEyeCamNodelet::bufferTimestamp, this);
+  }
 
   camera_ready_srv_client_ = nh.serviceClient<ueye_cam::CameraReady>(camera_ready_service_);
 
@@ -206,7 +219,7 @@ void UEyeCamNodelet::onInit() {
   startFrameGrabber();
 
   //it seems this takes some time ~50ms, this is why we do it here instead of the frameGrabber loop
-  if(use_external_timestamp_ == true)
+  if(time_synch_method_ == TimeSynchMethod_MatchSequences)
   {
 
       if (cam_params_.ext_trigger_mode) {
@@ -238,13 +251,17 @@ void UEyeCamNodelet::onInit() {
   }
 
   // Start IMU-camera trigger
-  sendTriggerReady();
+  if(time_synch_method_ == TimeSynchMethod_MatchSequences)
+  {
+    sendTriggerReady();
+  }
 
   INFO_STREAM(
       "UEye camera [" << cam_name_ << "] initialized on topic " << ros_cam_pub_.getTopic() << endl <<
       "Camera Ready Service:\t\t\t" << camera_ready_service_ << endl <<
       "Camera Imu Topic:\t\t\t" << camera_imu_topic_ << endl <<
       "Camera Is Master:\t\t\t" << (camera_is_master_ ? "true":"false")<< endl <<
+      "Time Synch Method:\t\t\t" << time_synch_method_ << endl <<
       "Width:\t\t\t" << cam_params_.image_width << endl <<
       "Height:\t\t\t" << cam_params_.image_height << endl <<
       "Left Pos.:\t\t" << cam_params_.image_left << endl <<
@@ -982,7 +999,7 @@ try{
     // and stop live video mode if ROS image topic no longer has any subscribers
     //ROS_DEBUG("Number of subscribers; image: %d; rect image: %d;", ros_cam_pub_.getNumSubscribers(), ros_rect_pub_.getNumSubscribers());
 
-    if(use_external_timestamp_ == false)
+    if(time_synch_method_ != TimeSynchMethod_MatchSequences)
     {
         currNumSubscribers = ros_cam_pub_.getNumSubscribers() + ros_rect_pub_.getNumSubscribers();
         if (currNumSubscribers > 0 && prevNumSubscribers <= 0) {
@@ -1120,15 +1137,23 @@ try{
 
         if (!frame_grab_alive_ || !ros::ok()) break;
 
-        if(use_external_timestamp_)
+        switch(time_synch_method_)
         {
-            bufferImages(cam_info_msg_ptr, img_msg_ptr);
-        }
-        else
-        {
-            publishImages(cam_info_msg_ptr, img_msg_ptr);
-        }
+            case TimeSynchMethod_None:
+                publishImages(cam_info_msg_ptr, img_msg_ptr);
+                break;
+            case TimeSynchMethod_TimestampAlwaysFirst:
+                bufferImagesSingle(cam_info_msg_ptr, img_msg_ptr);
+                break;
+            case TimeSynchMethod_MatchSequences:
+                bufferImagesMultiple(cam_info_msg_ptr, img_msg_ptr);
+                break;
 
+            default:
+                ROS_FATAL_STREAM ("Invalid value of time_synch_method !!");
+                return;
+            //fail
+        }
 
       } //if(processNextFrame(eventTimeout) != NULL)
     } //if (isCapturing())
@@ -1301,133 +1326,136 @@ void UEyeCamNodelet::trim_message_buffer()
     }
 }
 
-void UEyeCamNodelet::bufferImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr)
+/**
+ * @brief UEyeCamNodelet::bufferImagesSingle - used for buffering images if @var synch_timestamp_always_first_ is true
+ * @param cam_info_msg_ptr
+ * @param img_msg_ptr
+ */
+void UEyeCamNodelet::bufferImagesSingle(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr)
 {
     //this function is guarded with the mutex
     boost::lock_guard<boost::mutex> guard(message_buffer_mutex_);
 
 
     //we assume timestamp is always first
-    if(synch_timestamp_always_first_)
+    synch_timestamp_always_first_containerPtr->cameraImagePtr = img_msg_ptr;
+    synch_timestamp_always_first_containerPtr->cameraInfoPtr = cam_info_msg_ptr;
+    if(synch_timestamp_always_first_containerPtr->isComplette())
     {
-
-        synch_timestamp_always_first_containerPtr->cameraImagePtr = img_msg_ptr;
-        synch_timestamp_always_first_containerPtr->cameraInfoPtr = cam_info_msg_ptr;
-        if(synch_timestamp_always_first_containerPtr->isComplette())
-        {
-            adjustTimeStampAndPublishImages(synch_timestamp_always_first_containerPtr);
-        }
-        else
-        {
-            ROS_WARN_STREAM("Image arrived before timestamp!");
-        }
-        synch_timestamp_always_first_containerPtr->reset();
-        return;
+        adjustTimeStampAndPublishImages(synch_timestamp_always_first_containerPtr);
     }
     else
     {
-
-
-        unsigned int thisSeq = cam_info_msg_ptr->header.seq;
-
-        if(thisSeq != lastImuTimeStampSeq)
-        {
-            ROS_WARN_STREAM("Possible lost of IMU <=> CAMERA sync; camera:" << thisSeq << "; imu:" << lastImuTimeStampSeq);
-        }
-
-        //detect lost frames try to catch up
-        if(message_buffer_.size() > 1)
-        {
-            double requested_interval = 1.0 / cam_params_.frame_rate;
-            double allowed_interval = requested_interval * 2.0; // 200%
-            double thisInterval = (img_msg_ptr->header.stamp - lastImageTimeStamp_).toSec();
-            if(thisInterval > allowed_interval)
-            {
-                auto lostFrames = (uint)floor(thisInterval/requested_interval);
-                //we have lost a frame lets increment
-                ROS_WARN_STREAM("Detected Lost frames: " << std::setprecision (15) << lostFrames << "; incrementing sequence to match");
-                ros_frame_count_ = ros_frame_count_ + lostFrames;
-            }
-            //ROS_DEBUG_STREAM("Image Interval: " << std::setprecision (15) << thisInterval << "; allowed: " << allowed_interval);
-        }
-        lastImageTimeStamp_ = img_msg_ptr->header.stamp;
-
-
-        CameraSynchMessageContainerPtr entryPtr;
-
-        std::map<unsigned int, CameraSynchMessageContainerPtr>::iterator it = message_buffer_.find(thisSeq);
-        if(it == message_buffer_.end())
-        {
-            ROS_DEBUG_STREAM("bufferImages; new  ; seq: " << thisSeq);
-            // there is no timnestamp yet
-            entryPtr = boost::make_shared<CameraSynchMessageContainer>(img_msg_ptr, cam_info_msg_ptr);
-            message_buffer_[thisSeq] = entryPtr;
-        }
-        else // timesynch exists
-        {
-            ROS_DEBUG_STREAM("bufferImages; exist; seq: " << thisSeq);
-            entryPtr = it->second;
-        }
-        entryPtr->cameraImagePtr = img_msg_ptr;
-        entryPtr->cameraInfoPtr = cam_info_msg_ptr;
-
-
-        if(entryPtr->isComplette())
-        {
-            adjustTimeStampAndPublishImages(entryPtr);
-        }
-
-        trim_message_buffer();
+        ROS_WARN_STREAM("Image arrived before timestamp!");
     }
 }
 
-void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStampPtr& timeStampPtr)
+/**
+ * @brief UEyeCamNodelet::bufferImagesMultiple - used for buffering images if @var synch_timestamp_always_first_ is true
+ * @param cam_info_msg_ptr
+ * @param img_msg_ptr
+ */
+void UEyeCamNodelet::bufferImagesMultiple(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr)
 {
-    if(use_external_timestamp_ == false)
-    {
-        return;
-    }
-
     //this function is guarded with the mutex
     boost::lock_guard<boost::mutex> guard(message_buffer_mutex_);
 
+    unsigned int thisSeq = cam_info_msg_ptr->header.seq;
 
-    if(synch_timestamp_always_first_)
+    if(thisSeq != lastImuTimeStampSeq)
     {
-        synch_timestamp_always_first_containerPtr->updateCamIMUStamp(timeStampPtr);
-        synch_timestamp_always_first_containerPtr->cameraImagePtr = nullptr;
-        synch_timestamp_always_first_containerPtr->cameraInfoPtr = nullptr;
-        return;
+        ROS_WARN_STREAM("Possible lost of IMU <=> CAMERA sync; camera:" << thisSeq << "; imu:" << lastImuTimeStampSeq);
     }
 
+    //detect lost frames try to catch up
+    if(message_buffer_.size() > 1)
+    {
+        double requested_interval = 1.0 / cam_params_.frame_rate;
+        double allowed_interval = requested_interval * 2.0; // 200%
+        double thisInterval = (img_msg_ptr->header.stamp - lastImageTimeStamp_).toSec();
+        if(thisInterval > allowed_interval)
+        {
+            auto lostFrames = (uint)floor(thisInterval/requested_interval);
+            //we have lost a frame lets increment
+            ROS_WARN_STREAM("Detected Lost frames: " << std::setprecision (15) << lostFrames << "; incrementing sequence to match");
+            ros_frame_count_ = ros_frame_count_ + lostFrames;
+        }
+        //ROS_DEBUG_STREAM("Image Interval: " << std::setprecision (15) << thisInterval << "; allowed: " << allowed_interval);
+    }
+    lastImageTimeStamp_ = img_msg_ptr->header.stamp;
+
+
     CameraSynchMessageContainerPtr entryPtr;
-    unsigned int thisSeq = timeStampPtr->frame_seq_id;
-    lastImuTimeStampSeq = thisSeq;
 
     std::map<unsigned int, CameraSynchMessageContainerPtr>::iterator it = message_buffer_.find(thisSeq);
     if(it == message_buffer_.end())
     {
+        ROS_DEBUG_STREAM("bufferImages; new  ; seq: " << thisSeq);
         // there is no timnestamp yet
-        ROS_DEBUG_STREAM("bufferTimestamp; new  ; seq: " << thisSeq);
-        entryPtr = boost::make_shared<CameraSynchMessageContainer>(timeStampPtr);
+        entryPtr = boost::make_shared<CameraSynchMessageContainer>(img_msg_ptr, cam_info_msg_ptr);
         message_buffer_[thisSeq] = entryPtr;
-
     }
     else // timesynch exists
     {
-        ROS_DEBUG_STREAM("bufferTimestamp; exist; seq: " << thisSeq);
+        ROS_DEBUG_STREAM("bufferImages; exist; seq: " << thisSeq);
         entryPtr = it->second;
     }
+    entryPtr->cameraImagePtr = img_msg_ptr;
+    entryPtr->cameraInfoPtr = cam_info_msg_ptr;
 
-
-
-    entryPtr->updateCamIMUStamp(timeStampPtr);
 
     if(entryPtr->isComplette())
     {
         adjustTimeStampAndPublishImages(entryPtr);
     }
+
     trim_message_buffer();
+}
+
+void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStampPtr& timeStampPtr)
+{
+    //this function is guarded with the mutex
+    boost::lock_guard<boost::mutex> guard(message_buffer_mutex_);
+
+    unsigned int thisSeq = timeStampPtr->frame_seq_id;
+
+    if(time_synch_method_ == TimeSynchMethod_TimestampAlwaysFirst)
+    {
+        ROS_DEBUG_STREAM("bufferTimestamp; new  ; seq: " << thisSeq);
+        synch_timestamp_always_first_containerPtr->updateCamIMUStamp(timeStampPtr);
+        synch_timestamp_always_first_containerPtr->cameraImagePtr = nullptr;
+        synch_timestamp_always_first_containerPtr->cameraInfoPtr = nullptr;
+    }
+    else if(time_synch_method_ == TimeSynchMethod_MatchSequences)
+    {
+        CameraSynchMessageContainerPtr entryPtr;
+        lastImuTimeStampSeq = thisSeq;
+
+        std::map<unsigned int, CameraSynchMessageContainerPtr>::iterator it = message_buffer_.find(thisSeq);
+        if(it == message_buffer_.end())
+        {
+            // there is no timnestamp yet
+            ROS_DEBUG_STREAM("bufferTimestamp; new  ; seq: " << thisSeq);
+            entryPtr = boost::make_shared<CameraSynchMessageContainer>(timeStampPtr);
+            message_buffer_[thisSeq] = entryPtr;
+
+        }
+        else // timesynch exists
+        {
+            ROS_DEBUG_STREAM("bufferTimestamp; exist; seq: " << thisSeq);
+            entryPtr = it->second;
+        }
+
+
+
+        entryPtr->updateCamIMUStamp(timeStampPtr);
+
+        if(entryPtr->isComplette())
+        {
+            adjustTimeStampAndPublishImages(entryPtr);
+        }
+        trim_message_buffer();
+    }
 }
 
 
@@ -1449,6 +1477,7 @@ void UEyeCamNodelet::publishImages(const sensor_msgs::CameraInfoPtr& cam_info_ms
     ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
 
 
+    //if noone is interested in cectified image lets skip it
     if(ros_rect_pub_.getNumSubscribers() == 0)
     {
         return;
@@ -1492,6 +1521,7 @@ void UEyeCamNodelet::sendTriggerReady()
     sig.request.frame_rate = cam_params_.frame_rate;
     sig.request.is_master = camera_is_master_;
 
+    ROS_DEBUG_STREAM("Camera [" << cam_name_ << "] reporting it is ready");
     if(!camera_ready_srv_client_.call(sig))
     {
         ROS_ERROR("Failed to call ready-for-trigger");

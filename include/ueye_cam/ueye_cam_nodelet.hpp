@@ -67,6 +67,21 @@
 
 namespace ueye_cam {
 
+/**
+ * Time synchronisation method:
+ * None - no external timestamp is used
+ * TimestampAlwaysFirst - It is assumed that Timestamp arrives first and matching image after but before another timestamp
+ * MatchSequences - It is assumed that Timestamp and image messages arrive without interruption and they both start with sequence of 0.
+ *      Synchronisation trigger is used to make sure both sequences start from 0.
+ * see http://dev.px4.io/advanced-camera-trigger.html for more details
+ */
+ typedef enum e_TimeSynchMethod
+{
+    TimeSynchMethod_None = 0,
+    TimeSynchMethod_TimestampAlwaysFirst = 1,
+    TimeSynchMethod_MatchSequences = 2
+} TimeSynchMethod;
+
 
 typedef dynamic_reconfigure::Server<ueye_cam::UEyeCamConfig> ReconfigureServer;
 
@@ -95,8 +110,7 @@ public:
   const static std::string DEFAULT_TIMEOUT_TOPIC;
   const static std::string DEFAULT_COLOR_MODE;
   const static bool        DEFAULT_CAMERA_IS_MASTER;
-  const static bool        DEFAULT_USE_EXTERNAL_TIMESTAMP;
-  const static bool        DEFAULT_SYNCH_TIMESTAMP_ALWAYS_FIRST;
+  const static unsigned int        DEFAULT_TIME_SYNCH_METHOD;
 
 
 
@@ -205,7 +219,8 @@ protected:
    * @param containerptr
    */
   void bufferTimestamp(const mavros_msgs::CamIMUStampPtr& msg);
-  void bufferImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr);
+  void bufferImagesSingle(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr);
+  void bufferImagesMultiple(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr);
   void publishImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr);
   void adjustTimeStampAndPublishImages(const CameraSynchMessageContainerPtr& containerPtr);
 
@@ -244,8 +259,16 @@ protected:
    */
   ros::Subscriber ros_timestamp_sub_;
 
+
+  /**
+   * @brief time_synch_method_
+   */
+  TimeSynchMethod time_synch_method_;
+
+
   std::map<unsigned int, CameraSynchMessageContainerPtr> message_buffer_;
-    boost::mutex message_buffer_mutex_;
+  CameraSynchMessageContainerPtr synch_timestamp_always_first_containerPtr;
+  boost::mutex message_buffer_mutex_;
 
   ros::ServiceClient camera_ready_srv_client_;
 
@@ -278,9 +301,6 @@ protected:
   std::string camera_ready_service_;
   std::string camera_imu_topic_;
   bool camera_is_master_;
-  bool use_external_timestamp_;
-  bool synch_timestamp_always_first_;
-  CameraSynchMessageContainerPtr synch_timestamp_always_first_containerPtr;
   ros::Time lastImageTimeStamp_;
   unsigned int lastImuTimeStampSeq;
 };
