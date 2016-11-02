@@ -63,6 +63,7 @@
 #include "ueye_cam/camera_synch_message_contrainer.hpp"
 #include "ueye_cam/Exposure.h"
 #include "ueye_cam/CameraReady.h"
+#include "pid.hpp"
 
 
 namespace ueye_cam {
@@ -101,16 +102,17 @@ public:
   constexpr static int DEFAULT_PIXEL_CLOCK = 25;
   constexpr static int DEFAULT_FLASH_DURATION = 1000;
 
-  const static std::string DEFAULT_FRAME_NAME;
-  const static std::string DEFAULT_CAMERA_NAME;
-  const static std::string DEFAULT_CAMERA_IMU_TOPIC;
-  const static std::string DEFAULT_CAMERA_READY_SERVICE;
-  const static std::string DEFAULT_CAMERA_TOPIC;
-  const static std::string DEFAULT_CAMERA_TOPIC_RECT;
-  const static std::string DEFAULT_TIMEOUT_TOPIC;
-  const static std::string DEFAULT_COLOR_MODE;
-  const static bool        DEFAULT_CAMERA_IS_MASTER;
-  const static unsigned int        DEFAULT_TIME_SYNCH_METHOD;
+  const static std::string  DEFAULT_FRAME_NAME;
+  const static std::string  DEFAULT_CAMERA_NAME;
+  const static std::string  DEFAULT_CAMERA_IMU_TOPIC;
+  const static std::string  DEFAULT_CAMERA_READY_SERVICE;
+  const static std::string  DEFAULT_CAMERA_TOPIC;
+  const static std::string  DEFAULT_CAMERA_TOPIC_RECT;
+  const static std::string  DEFAULT_CAMERA_MASTER_EXPOSURE_TOPIC;
+  const static std::string  DEFAULT_TIMEOUT_TOPIC;
+  const static std::string  DEFAULT_COLOR_MODE;
+  const static bool         DEFAULT_CAMERA_IS_MASTER;
+  const static unsigned int DEFAULT_TIME_SYNCH_METHOD;
 
 
 
@@ -202,12 +204,7 @@ protected:
    * @brief setSlaveExposure
    * @param msg
    */
-  void setSlaveExposure(const ueye_cam::Exposure& msg);
-
-  /**
-   * @brief sendTriggerReady
-   */
-  void sendTriggerReady();
+  void setSlaveExposure(const ueye_cam::ExposurePtr &msgPtr);
 
   /**
    * @brief sendSlaveExposure
@@ -215,14 +212,23 @@ protected:
   void sendSlaveExposure();
 
   /**
+   * @brief sendTriggerReady
+   */
+  void sendTriggerReady();
+
+
+  /**
    * @brief processAndPublish
    * @param containerptr
    */
   void bufferTimestamp(const mavros_msgs::CamIMUStampPtr& msg);
-  void bufferImagesSingle(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr);
-  void bufferImagesMultiple(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr);
-  void publishImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr);
+  void bufferImagesSingle(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr, const cv_bridge::CvImageConstPtr& img_msg_cv_ptr);
+  void bufferImagesMultiple(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr, const cv_bridge::CvImageConstPtr& img_msg_cv_ptr);
+  void publishImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr, cv_bridge::CvImageConstPtr& img_msg_cv_ptr);
   void adjustTimeStampAndPublishImages(const CameraSynchMessageContainerPtr& containerPtr);
+
+  cv_bridge::CvImageConstPtr  optimizeCaptureParams( const sensor_msgs::ImagePtr& img_msg_ptr);
+
 
   void trim_message_buffer();
 
@@ -287,6 +293,7 @@ protected:
   std::string frame_name_;
   std::string cam_topic_;
   std::string cam_topic_rect_;
+  std::string cam_master_exposure_topic_;
   std::string timeout_topic_;
   std::string cam_intr_filename_;
   std::string cam_params_filename_; // should be valid UEye INI file
@@ -303,6 +310,9 @@ protected:
   bool camera_is_master_;
   ros::Time lastImageTimeStamp_;
   unsigned int lastImuTimeStampSeq;
+
+  PID ocv_auto_exposure_pid_;
+
 };
 
 

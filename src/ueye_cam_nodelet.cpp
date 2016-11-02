@@ -73,9 +73,11 @@ const std::string UEyeCamNodelet::DEFAULT_CAMERA_IMU_TOPIC = "/cam_imu_sync/cam_
 const std::string UEyeCamNodelet::DEFAULT_CAMERA_READY_SERVICE = "/trigger/camera_ready";
 const std::string UEyeCamNodelet::DEFAULT_CAMERA_TOPIC = "image_raw";
 const std::string UEyeCamNodelet::DEFAULT_CAMERA_TOPIC_RECT = "image_rect";
+const std::string UEyeCamNodelet::DEFAULT_CAMERA_MASTER_EXPOSURE_TOPIC = "master_exposure";
 const std::string UEyeCamNodelet::DEFAULT_TIMEOUT_TOPIC = "timeout_count";
 const std::string UEyeCamNodelet::DEFAULT_COLOR_MODE = "";
 const bool UEyeCamNodelet::DEFAULT_CAMERA_IS_MASTER = false;
+
 const unsigned int UEyeCamNodelet::DEFAULT_TIME_SYNCH_METHOD = 0; //TimeSynchMethod_None;
 
 constexpr int UEyeCamDriver::ANY_CAMERA; // Needed since CMakeLists.txt creates 2 separate libraries: one for non-ROS parent class, and one for ROS child class
@@ -98,7 +100,8 @@ UEyeCamNodelet::UEyeCamNodelet():
     init_clock_tick_(0),
     init_publish_time_(0),
     prev_output_frame_idx_(0),
-    lastImageTimeStamp_(0,0)
+    lastImageTimeStamp_(0,0),
+    ocv_auto_exposure_pid_()
 {
   ros_image_.is_bigendian = (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__); // TODO: what about MS Windows?
   cam_params_.image_width = DEFAULT_IMAGE_WIDTH;
@@ -129,6 +132,14 @@ UEyeCamNodelet::UEyeCamNodelet():
   cam_params_.flash_duration = DEFAULT_FLASH_DURATION;
   cam_params_.flip_upd = false;
   cam_params_.flip_lr = false;
+  cam_params_.ocv_auto_exposure = false;
+  cam_params_.ocv_auto_exposure_Kp = 2.0;
+  cam_params_.ocv_auto_exposure_Ki = 0.1;
+  cam_params_.ocv_auto_exposure_Kd = 0.1;
+  cam_params_.ocv_auto_exposure_interval = 4;
+  cam_params_.ocv_auto_exposure_set_point = 2.5;
+  cam_params_.ocv_auto_exposure_min = 0.01;
+  cam_params_.ocv_auto_exposure_max = 20.0;
   synch_timestamp_always_first_containerPtr = boost::make_shared<ueye_cam::CameraSynchMessageContainer>();
 }
 
@@ -159,7 +170,6 @@ void UEyeCamNodelet::onInit() {
   local_nh.param<bool>("camera_is_master", camera_is_master_, DEFAULT_CAMERA_IS_MASTER);
 
   int temp_method = -5;
-
   local_nh.param<int>("time_synch_method", temp_method, DEFAULT_TIME_SYNCH_METHOD);
 
   if(temp_method >= 0 && temp_method <= 2)
@@ -174,6 +184,7 @@ void UEyeCamNodelet::onInit() {
   local_nh.param<string>("frame_name", frame_name_, DEFAULT_FRAME_NAME);
   local_nh.param<string>("camera_topic", cam_topic_, DEFAULT_CAMERA_TOPIC);
   local_nh.param<string>("camera_topic_rect", cam_topic_rect_, DEFAULT_CAMERA_TOPIC_RECT);
+  local_nh.param<string>("camera_master_exposure_topic", cam_master_exposure_topic_, DEFAULT_CAMERA_MASTER_EXPOSURE_TOPIC);
   local_nh.param<string>("timeout_topic", timeout_topic_, DEFAULT_TIMEOUT_TOPIC);
   local_nh.param<string>("camera_intrinsics_file", cam_intr_filename_, "");
   local_nh.param<int>("camera_id", cam_id_, ANY_CAMERA);
@@ -194,6 +205,16 @@ void UEyeCamNodelet::onInit() {
   // Setup publishers, subscribers, and services
   ros_cam_pub_ = it.advertiseCamera(cam_name_ + "/" + cam_topic_, 1);
   ros_rect_pub_ = it.advertise(cam_name_ + "/" + cam_topic_rect_, 1);
+  if(camera_is_master_)
+  {
+    ros_exposure_pub_ = nh.advertise<ueye_cam::Exposure>(cam_name_ + "/" + cam_master_exposure_topic_, 1);
+  }
+  else
+  {
+    ros_exposure_sub_ = nh.subscribe(cam_master_exposure_topic_, 1,
+                                   &UEyeCamNodelet::setSlaveExposure, this);
+  }
+
 
   if(time_synch_method_ != TimeSynchMethod_None)
   {
@@ -566,6 +587,76 @@ INT UEyeCamNodelet::parseROSParams(ros::NodeHandle& local_nh) {
     }
   }
 
+  if (local_nh.hasParam("ocv_auto_exposure")) {
+    local_nh.getParam("ocv_auto_exposure", cam_params_.ocv_auto_exposure);
+    if (cam_params_.ocv_auto_exposure != prevCamParams.ocv_auto_exposure) {
+      hasNewParams = true;
+    }
+  }
+
+  if (local_nh.hasParam("ocv_auto_exposure_min")) {
+    local_nh.getParam("ocv_auto_exposure_min", cam_params_.ocv_auto_exposure_min);
+    if (cam_params_.ocv_auto_exposure_min != prevCamParams.ocv_auto_exposure_min) {
+      hasNewParams = true;
+    }
+  }
+
+  if (local_nh.hasParam("ocv_auto_exposure_max")) {
+    local_nh.getParam("ocv_auto_exposure_max", cam_params_.ocv_auto_exposure_max);
+    if (cam_params_.ocv_auto_exposure_max != prevCamParams.ocv_auto_exposure_max) {
+      hasNewParams = true;
+    }
+  }
+
+  if (local_nh.hasParam("ocv_auto_exposure_Kp")) {
+    local_nh.getParam("ocv_auto_exposure_Kp", cam_params_.ocv_auto_exposure_Kp);
+    if (cam_params_.ocv_auto_exposure_Kp != prevCamParams.ocv_auto_exposure_Kp) {
+      hasNewParams = true;
+    }
+  }
+
+  if (local_nh.hasParam("ocv_auto_exposure_Ki")) {
+    local_nh.getParam("ocv_auto_exposure_Ki", cam_params_.ocv_auto_exposure_Ki);
+    if (cam_params_.ocv_auto_exposure_Ki != prevCamParams.ocv_auto_exposure_Ki) {
+      hasNewParams = true;
+    }
+  }
+
+  if (local_nh.hasParam("ocv_auto_exposure_Kd")) {
+    local_nh.getParam("ocv_auto_exposure_Kd", cam_params_.ocv_auto_exposure_Kd);
+    if (cam_params_.ocv_auto_exposure_Kd != prevCamParams.ocv_auto_exposure_Kd) {
+      hasNewParams = true;
+    }
+  }
+
+  if (local_nh.hasParam("ocv_auto_exposure_set_point")) {
+    local_nh.getParam("ocv_auto_exposure_set_point", cam_params_.ocv_auto_exposure_set_point);
+    if (cam_params_.ocv_auto_exposure_set_point != prevCamParams.ocv_auto_exposure_set_point) {
+      hasNewParams = true;
+    }
+  }
+
+  if (local_nh.hasParam("ocv_auto_exposure_interval")) {
+    local_nh.getParam("ocv_auto_exposure_interval", cam_params_.ocv_auto_exposure_interval);
+    if (cam_params_.ocv_auto_exposure_interval != prevCamParams.ocv_auto_exposure_interval) {
+      hasNewParams = true;
+    }
+  }
+
+  if(cam_params_.ocv_auto_exposure)
+  {
+      ocv_auto_exposure_pid_.updateParams(
+                  (uint)cam_params_.frame_rate,
+                  ((1/cam_params_.frame_rate) * cam_params_.ocv_auto_exposure_interval),
+                  -0.5,
+                  0.5,
+                  cam_params_.ocv_auto_exposure_Kp,
+                  cam_params_.ocv_auto_exposure_Ki,
+                  cam_params_.ocv_auto_exposure_Kd);
+  }
+
+
+
   if (hasNewParams) {
     // Configure color mode, resolution, and subsampling rate
     // NOTE: this batch of configurations are mandatory, to ensure proper allocation of local frame buffer
@@ -719,10 +810,17 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
     output_rate_mutex_.unlock();
   }
 
+  if(config.ocv_auto_exposure != cam_params_.ocv_auto_exposure)
+  {
+      //override camera build in auo exposure
+      config.auto_exposure = !config.ocv_auto_exposure;
+  }
+
   if (config.auto_exposure != cam_params_.auto_exposure ||
       config.exposure != cam_params_.exposure) {
     if (setExposure(config.auto_exposure, config.exposure) != IS_SUCCESS) return;
   }
+
 
   if (config.auto_white_balance != cam_params_.auto_white_balance ||
       config.white_balance_red_offset != cam_params_.white_balance_red_offset ||
@@ -755,6 +853,18 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
 
   // Update local copy of parameter set to newly updated set
   cam_params_ = config;
+
+  if(cam_params_.ocv_auto_exposure )
+  {
+      ocv_auto_exposure_pid_.updateParams(
+                  (uint)cam_params_.frame_rate,
+                  ((1/cam_params_.frame_rate) * cam_params_.ocv_auto_exposure_interval),
+                  -0.5,
+                  0.5,
+                  cam_params_.ocv_auto_exposure_Kp,
+                  cam_params_.ocv_auto_exposure_Ki,
+                  cam_params_.ocv_auto_exposure_Kd);
+  }
 
   // Restart frame grabber if needed
   cfg_sync_requested_ = true;
@@ -997,7 +1107,7 @@ void UEyeCamNodelet::frameGrabLoop() {
 try{
     // Initialize live video mode if camera was previously asleep, and ROS image topic has subscribers;
     // and stop live video mode if ROS image topic no longer has any subscribers
-    //ROS_DEBUG("Number of subscribers; image: %d; rect image: %d;", ros_cam_pub_.getNumSubscribers(), ros_rect_pub_.getNumSubscribers());
+    ROS_DEBUG("Number of subscribers; image: %d; rect image: %d;", ros_cam_pub_.getNumSubscribers(), ros_rect_pub_.getNumSubscribers());
 
     if(time_synch_method_ != TimeSynchMethod_MatchSequences)
     {
@@ -1085,25 +1195,6 @@ try{
         img_msg_ptr->header.stamp = cam_info_msg_ptr->header.stamp = getImageTickTimestamp();
 
         // Process new frame
-#ifdef DEBUG_PRINTOUT_FRAME_GRAB_RATES
-        grabbedFrameCount++;
-        currGrabbedFrame = ros::Time::now();
-        if (grabbedFrameCount > 1) {
-          grabbedFrameSum += (currGrabbedFrame - prevGrabbedFrame).toSec() * 1000.0;
-          grabbedFrameSumSqrd += ((currGrabbedFrame - prevGrabbedFrame).toSec() * 1000.0)*((currGrabbedFrame - prevGrabbedFrame).toSec() * 1000.0);
-        }
-        prevGrabbedFrame = currGrabbedFrame;
-
-        if (grabbedFrameCount > 1) {
-          WARN_STREAM("\nPre-Grab: " << startGrabSum/startGrabCount << " +/- " <<
-              sqrt(startGrabSumSqrd/startGrabCount - (startGrabSum/startGrabCount)*(startGrabSum/startGrabCount)) << " ms (" <<
-              1000.0*startGrabCount/startGrabSum << "Hz)\n" <<
-              "Post-Grab: " << grabbedFrameSum/grabbedFrameCount << " +/- " <<
-              sqrt(grabbedFrameSumSqrd/grabbedFrameCount - (grabbedFrameSum/grabbedFrameCount)*(grabbedFrameSum/grabbedFrameCount)) << " ms (" <<
-              1000.0*grabbedFrameCount/grabbedFrameSum << "Hz)\n" <<
-              "Target: " << cam_params_.frame_rate << "Hz");
-        }
-#endif
 
         if (!frame_grab_alive_ || !ros::ok()) break;
 
@@ -1134,26 +1225,52 @@ try{
 
         img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = ros_frame_count_++;
         img_msg_ptr->header.frame_id = cam_info_msg_ptr->header.frame_id;
+        ROS_DEBUG_STREAM("Image ready");
 
         if (!frame_grab_alive_ || !ros::ok()) break;
+
+        cv_bridge::CvImageConstPtr img_msg_cv_ptr;
+        // compute optimal params for next image frame
+        if(camera_is_master_ && cam_params_.ocv_auto_exposure && (ros_frame_count_ % cam_params_.ocv_auto_exposure_interval == 0))
+        {
+            img_msg_cv_ptr = optimizeCaptureParams(img_msg_ptr);
+        }
 
         switch(time_synch_method_)
         {
             case TimeSynchMethod_None:
-                publishImages(cam_info_msg_ptr, img_msg_ptr);
+                publishImages(cam_info_msg_ptr, img_msg_ptr, img_msg_cv_ptr);
                 break;
             case TimeSynchMethod_TimestampAlwaysFirst:
-                bufferImagesSingle(cam_info_msg_ptr, img_msg_ptr);
+                bufferImagesSingle(cam_info_msg_ptr, img_msg_ptr, img_msg_cv_ptr);
                 break;
             case TimeSynchMethod_MatchSequences:
-                bufferImagesMultiple(cam_info_msg_ptr, img_msg_ptr);
+                bufferImagesMultiple(cam_info_msg_ptr, img_msg_ptr, img_msg_cv_ptr);
                 break;
 
             default:
                 ROS_FATAL_STREAM ("Invalid value of time_synch_method !!");
                 return;
-            //fail
         }
+#ifdef DEBUG_PRINTOUT_FRAME_GRAB_RATES
+        grabbedFrameCount++;
+        currGrabbedFrame = ros::Time::now();
+        if (grabbedFrameCount > 1) {
+          grabbedFrameSum += (currGrabbedFrame - prevGrabbedFrame).toSec() * 1000.0;
+          grabbedFrameSumSqrd += ((currGrabbedFrame - prevGrabbedFrame).toSec() * 1000.0)*((currGrabbedFrame - prevGrabbedFrame).toSec() * 1000.0);
+        }
+        prevGrabbedFrame = currGrabbedFrame;
+
+        if (grabbedFrameCount > 1) {
+          WARN_STREAM("\nPre-Grab: " << startGrabSum/startGrabCount << " +/- " <<
+              sqrt(startGrabSumSqrd/startGrabCount - (startGrabSum/startGrabCount)*(startGrabSum/startGrabCount)) << " ms (" <<
+              1000.0*startGrabCount/startGrabSum << "Hz)\n" <<
+              "Post-Grab: " << grabbedFrameSum/grabbedFrameCount << " +/- " <<
+              sqrt(grabbedFrameSumSqrd/grabbedFrameCount - (grabbedFrameSum/grabbedFrameCount)*(grabbedFrameSum/grabbedFrameCount)) << " ms (" <<
+              1000.0*grabbedFrameCount/grabbedFrameSum << "Hz)\n" <<
+              "Target: " << cam_params_.frame_rate << "Hz");
+        }
+#endif
 
       } //if(processNextFrame(eventTimeout) != NULL)
     } //if (isCapturing())
@@ -1331,7 +1448,7 @@ void UEyeCamNodelet::trim_message_buffer()
  * @param cam_info_msg_ptr
  * @param img_msg_ptr
  */
-void UEyeCamNodelet::bufferImagesSingle(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr)
+void UEyeCamNodelet::bufferImagesSingle(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr, const cv_bridge::CvImageConstPtr& img_msg_cv_ptr)
 {
     //this function is guarded with the mutex
     boost::lock_guard<boost::mutex> guard(message_buffer_mutex_);
@@ -1340,6 +1457,7 @@ void UEyeCamNodelet::bufferImagesSingle(const sensor_msgs::CameraInfoPtr& cam_in
     //we assume timestamp is always first
     synch_timestamp_always_first_containerPtr->cameraImagePtr = img_msg_ptr;
     synch_timestamp_always_first_containerPtr->cameraInfoPtr = cam_info_msg_ptr;
+    synch_timestamp_always_first_containerPtr->cameraImageCvPtr = img_msg_cv_ptr;
     if(synch_timestamp_always_first_containerPtr->isComplette())
     {
         adjustTimeStampAndPublishImages(synch_timestamp_always_first_containerPtr);
@@ -1355,7 +1473,7 @@ void UEyeCamNodelet::bufferImagesSingle(const sensor_msgs::CameraInfoPtr& cam_in
  * @param cam_info_msg_ptr
  * @param img_msg_ptr
  */
-void UEyeCamNodelet::bufferImagesMultiple(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr)
+void UEyeCamNodelet::bufferImagesMultiple(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr, const cv_bridge::CvImageConstPtr& img_msg_cv_ptr)
 {
     //this function is guarded with the mutex
     boost::lock_guard<boost::mutex> guard(message_buffer_mutex_);
@@ -1392,7 +1510,7 @@ void UEyeCamNodelet::bufferImagesMultiple(const sensor_msgs::CameraInfoPtr& cam_
     {
         ROS_DEBUG_STREAM("bufferImages; new  ; seq: " << thisSeq);
         // there is no timnestamp yet
-        entryPtr = boost::make_shared<CameraSynchMessageContainer>(img_msg_ptr, cam_info_msg_ptr);
+        entryPtr = boost::make_shared<CameraSynchMessageContainer>(img_msg_ptr, cam_info_msg_ptr, img_msg_cv_ptr);
         message_buffer_[thisSeq] = entryPtr;
     }
     else // timesynch exists
@@ -1400,8 +1518,10 @@ void UEyeCamNodelet::bufferImagesMultiple(const sensor_msgs::CameraInfoPtr& cam_
         ROS_DEBUG_STREAM("bufferImages; exist; seq: " << thisSeq);
         entryPtr = it->second;
     }
+
     entryPtr->cameraImagePtr = img_msg_ptr;
     entryPtr->cameraInfoPtr = cam_info_msg_ptr;
+    entryPtr->cameraImageCvPtr = img_msg_cv_ptr;
 
 
     if(entryPtr->isComplette())
@@ -1459,7 +1579,7 @@ void UEyeCamNodelet::bufferTimestamp(const mavros_msgs::CamIMUStampPtr& timeStam
 }
 
 
-void UEyeCamNodelet::adjustTimeStampAndPublishImages(const CameraSynchMessageContainerPtr& containerPtr)
+void UEyeCamNodelet::adjustTimeStampAndPublishImages( const CameraSynchMessageContainerPtr& containerPtr)
 {
     //ROS_DEBUG_STREAM("publishImages; seq: " << containerPtr->cameraImagePtr->header.seq <<
     //                 "; Old Time:" << std::setprecision (15)<< containerPtr->cameraImagePtr->header.stamp.toSec() <<
@@ -1467,13 +1587,13 @@ void UEyeCamNodelet::adjustTimeStampAndPublishImages(const CameraSynchMessageCon
     //adjust the timestamp to one received from Pixhawk
     containerPtr->cameraImagePtr->header.stamp = containerPtr->cameraInfoPtr->header.stamp = containerPtr->timeStampTimestamp;
 
-    publishImages(containerPtr->cameraInfoPtr, containerPtr->cameraImagePtr);
+    publishImages(containerPtr->cameraInfoPtr, containerPtr->cameraImagePtr,containerPtr->cameraImageCvPtr);
 }
 
-void UEyeCamNodelet::publishImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr)
+void UEyeCamNodelet::publishImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr,const sensor_msgs::ImagePtr& img_msg_ptr, cv_bridge::CvImageConstPtr& img_msg_cv_ptr)
 {
 
-    ROS_DEBUG_STREAM("publishImages:publishing image_raw");
+    //ROS_DEBUG_STREAM("publishImages:publishing image_raw");
     ros_cam_pub_.publish(img_msg_ptr, cam_info_msg_ptr);
 
 
@@ -1492,21 +1612,22 @@ void UEyeCamNodelet::publishImages(const sensor_msgs::CameraInfoPtr& cam_info_ms
     }
 
 
-    cv_bridge::CvImagePtr cv_ptr;
-    ROS_DEBUG_STREAM("publishImages: making opencv copy...");
-    //we need CV version of an image...
-    try {
-        cv_ptr = cv_bridge::toCvCopy(*img_msg_ptr, img_msg_ptr->encoding);
+    if(img_msg_cv_ptr == nullptr)
+    {
+        //we need CV version of an image...
+        try {
+            img_msg_cv_ptr = cv_bridge::toCvShare(img_msg_ptr, img_msg_ptr->encoding);
 
-    } catch (cv_bridge::Exception &e) {
-        ROS_ERROR("cv_bridge exception: %s", e.what());
-        return;
+        } catch (cv_bridge::Exception &e) {
+            ROS_ERROR("cv_bridge exception: %s", e.what());
+            return;
+        }
     }
 
     // Rectify image
     cv::Mat frame_rect;
     //ROS_DEBUG_STREAM("publishImages: rectification...");
-    camera_model_.rectifyImage(cv_ptr->image, frame_rect, cv::INTER_LINEAR);
+    camera_model_.rectifyImage(img_msg_cv_ptr->image, frame_rect, cv::INTER_LINEAR);
 
     // Publish rectified image
     //ROS_DEBUG_STREAM("publishImages: publishing rectified...");
@@ -1527,6 +1648,112 @@ void UEyeCamNodelet::sendTriggerReady()
         ROS_ERROR("Failed to call ready-for-trigger");
     }
 }
+
+void UEyeCamNodelet::sendSlaveExposure()
+{
+    ueye_cam::Exposure msg;
+    msg.header.stamp = ros::Time::now();
+
+    msg.exposure_ms = cam_params_.exposure;
+
+    ros_exposure_pub_.publish(msg);
+
+}
+
+
+void UEyeCamNodelet::setSlaveExposure(const ueye_cam::ExposurePtr &msgPtr)
+{
+    if(camera_is_master_ == false)   // accept exposure timing from master camera
+    {
+        if(cam_params_.auto_exposure == true)
+        {
+            cam_params_.auto_exposure = false;
+        }
+
+        cam_params_.exposure = msgPtr->exposure_ms;
+
+        if(setExposure(cam_params_.auto_exposure , cam_params_.exposure) != IS_SUCCESS)
+        {
+            ROS_ERROR("Slave adaptive exposure setting failed");
+        }
+        ROS_DEBUG_STREAM("Setting slave exposure");
+    }
+
+}
+
+cv_bridge::CvImageConstPtr  UEyeCamNodelet::optimizeCaptureParams(const sensor_msgs::ImagePtr& img_msg_ptr)
+{
+    cv_bridge::CvImageConstPtr cv_ptr;
+
+    try
+    {
+        cv_ptr = cv_bridge::toCvShare(img_msg_ptr, img_msg_ptr->encoding);
+    }
+    catch(cv_bridge::Exception &e)
+    {
+        ROS_ERROR("Failed to create cv version of a image: %s", e.what());
+        return cv_ptr;
+    }
+
+    // Compute the histogram
+    int histSize = 256;
+    float range[] = { 0, 256 } ;
+    const float *histRange = { range };
+    cv::Mat hist ;
+
+    //TODO: Should the number of channels differ for non mono image???
+    cv::calcHist(&cv_ptr->image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
+    cv::normalize(hist, hist, 1.0 , 0, cv::NORM_L1); // TODO : check normalization
+
+    double j = 0, k = 0;
+    double blocksum = 0;
+
+    for(int i = 1; i <= histSize; i++)
+    {
+        blocksum += hist.at<float>(i - 1);
+        if(i % 51 == 0)
+        {
+            j += (i / 51) * blocksum;
+            k += blocksum;
+            blocksum = 0;
+        }
+    }
+
+    // Calculate mean sample value
+    double msv = j / k;
+
+    double delta =  ocv_auto_exposure_pid_.calculateAsynch(cam_params_.ocv_auto_exposure_set_point, msv, img_msg_ptr->header.stamp.toSec());
+
+    cam_params_.exposure += delta;
+
+
+    // limit exposure timing
+    if(cam_params_.exposure > cam_params_.ocv_auto_exposure_max)
+    {
+        cam_params_.exposure = cam_params_.ocv_auto_exposure_max;
+        ROS_DEBUG_STREAM("Limiting Exposure to max : " << cam_params_.exposure);
+    }
+    else if(cam_params_.exposure < cam_params_.ocv_auto_exposure_min)
+    {
+        cam_params_.exposure = cam_params_.ocv_auto_exposure_min;
+        ROS_DEBUG_STREAM("Limiting Exposure to min: " << cam_params_.exposure);
+    }
+    // Set optimal exposure
+
+    if(setExposure(cam_params_.auto_exposure , cam_params_.exposure) != IS_SUCCESS)
+    {
+        ROS_ERROR("Master adaptive exposure setting failed");
+    }
+
+    // Send exposure message for slave
+    if(camera_is_master_)
+    {
+        sendSlaveExposure();
+    }
+
+    return cv_ptr;
+}
+
 
 
 } // namespace ueye_cam

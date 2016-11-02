@@ -70,11 +70,13 @@ set(UEYECAM_LIB_HEADERS
 
 set(UEYECAM_NODELET_SOURCES
   src/ueye_cam_nodelet.cpp
+  src/pid.cpp
 )
 
 set(UEYECAM_NODELET_HEADERS
   include/ueye_cam/ueye_cam_nodelet.hpp
   include/ueye_cam/camera_synch_message_contrainer.hpp
+  include/ueye_cam/pid.hpp
 )
 
 add_message_files(DIRECTORY msg
