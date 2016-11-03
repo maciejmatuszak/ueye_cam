@@ -75,7 +75,6 @@ set(UEYECAM_NODELET_SOURCES
 
 set(UEYECAM_NODELET_HEADERS
   include/ueye_cam/ueye_cam_nodelet.hpp
-  include/ueye_cam/camera_synch_message_contrainer.hpp
   include/ueye_cam/pid.hpp
 )
 
@@ -116,10 +115,6 @@ add_dependencies(${UEYECAM_NODELET_NAME} ${PROJECT_NAME}_gencfg)
 
 add_executable(check_ueye_api src/check_ueye_api.cpp)
 target_link_libraries(check_ueye_api ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})
-
-add_executable(trigger_commander src/trigger_ready.cpp )
-
-target_link_libraries(trigger_commander ${catkin_LIBRARIES}  )
 
 
 # Do not package the barebones IDS drivers, since they will mask over the official drivers (when present)

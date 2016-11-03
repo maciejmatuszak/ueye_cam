@@ -88,6 +88,7 @@ double PID::calculate( double setpoint, double pv, double dt)
         for(uint i=0; i < _integral_queue.size(); i++)
         {
             Iout += _integral_queue[i];
+            _integral_queue[i] *= 0.8;
         }
 
         Iout *= Ki;

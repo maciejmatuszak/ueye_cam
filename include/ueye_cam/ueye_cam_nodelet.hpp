@@ -60,10 +60,13 @@
 #include <boost/thread/lock_guard.hpp>
 #include <ueye_cam/ueye_cam_driver.hpp>
 #include <image_geometry/pinhole_camera_model.h>
-#include "ueye_cam/camera_synch_message_contrainer.hpp"
 #include "ueye_cam/Exposure.h"
 #include "ueye_cam/CameraReady.h"
 #include "pid.hpp"
+#include "mavros_msgs/CamIMUStamp.h"
+#include "mavros_msgs/CommandTriggerControl.h"
+#include "cv_bridge/cv_bridge.h"
+
 
 
 namespace ueye_cam {
@@ -105,15 +108,15 @@ public:
   const static std::string  DEFAULT_FRAME_NAME;
   const static std::string  DEFAULT_CAMERA_NAME;
   const static std::string  DEFAULT_CAMERA_IMU_TOPIC;
-  const static std::string  DEFAULT_CAMERA_READY_SERVICE;
   const static std::string  DEFAULT_CAMERA_TOPIC;
   const static std::string  DEFAULT_CAMERA_TOPIC_RECT;
   const static std::string  DEFAULT_CAMERA_MASTER_EXPOSURE_TOPIC;
   const static std::string  DEFAULT_TIMEOUT_TOPIC;
   const static std::string  DEFAULT_COLOR_MODE;
   const static bool         DEFAULT_CAMERA_IS_MASTER;
-  const static unsigned int DEFAULT_TIME_SYNCH_METHOD;
-
+  const static bool         DEFAULT_USE_TIME_SYNCH;
+  const static std::string  DEFAULT_TRIGGER_CONTROL_SRV_NAME;
+  const static bool         DEFAULT_TRIGGER_CONTROL_SRV_IGNORE_RESP;
 
 
   UEyeCamNodelet();
@@ -195,11 +198,13 @@ protected:
    */
   bool fillMsgData(sensor_msgs::Image& img) const;
 
+  bool createImageCvPtr();
   /**
    * Returns image's timestamp or current wall time if driver call fails.
    */
   ros::Time getImageTimestamp();
 
+  bool setTriggerControl(bool enable);
   /**
    * @brief setSlaveExposure
    * @param msg
@@ -211,27 +216,15 @@ protected:
    */
   void sendSlaveExposure();
 
-  /**
-   * @brief sendTriggerReady
-   */
-  void sendTriggerReady();
-
 
   /**
    * @brief processAndPublish
    * @param containerptr
    */
   void bufferTimestamp(const mavros_msgs::CamIMUStampPtr& msg);
-  void bufferImagesSingle(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr, const cv_bridge::CvImageConstPtr& img_msg_cv_ptr);
-  void bufferImagesMultiple(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr, const cv_bridge::CvImageConstPtr& img_msg_cv_ptr);
-  void publishImages(const sensor_msgs::CameraInfoPtr& cam_info_msg_ptr, const sensor_msgs::ImagePtr& img_msg_ptr, cv_bridge::CvImageConstPtr& img_msg_cv_ptr);
-  void adjustTimeStampAndPublishImages(const CameraSynchMessageContainerPtr& containerPtr);
+  void publishImages();
 
-  cv_bridge::CvImageConstPtr  optimizeCaptureParams( const sensor_msgs::ImagePtr& img_msg_ptr);
-
-
-  void trim_message_buffer();
-
+  void optimizeCaptureParams();
 
   /**
    * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
@@ -265,21 +258,14 @@ protected:
    */
   ros::Subscriber ros_timestamp_sub_;
 
+  // Used for synchronisation with IMU
+  ros::Time synch_time_stamp_msg_;
+  //CV copy of the image message shared between rectification and adaptive exposure time algorithms
+  cv_bridge::CvImageConstPtr img_cv_ptr;
 
-  /**
-   * @brief time_synch_method_
-   */
-  TimeSynchMethod time_synch_method_;
+  sensor_msgs::ImagePtr img_msg_ptr;
+  sensor_msgs::CameraInfoPtr cam_info_msg_ptr;
 
-
-  std::map<unsigned int, CameraSynchMessageContainerPtr> message_buffer_;
-  CameraSynchMessageContainerPtr synch_timestamp_always_first_containerPtr;
-  boost::mutex message_buffer_mutex_;
-
-  ros::ServiceClient camera_ready_srv_client_;
-
-  sensor_msgs::Image ros_image_;
-  sensor_msgs::CameraInfo ros_cam_info_;
   unsigned int ros_frame_count_;
   ros::Publisher timeout_pub_;
   unsigned long long int timeout_count_;
@@ -305,11 +291,15 @@ protected:
   ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
   uint64_t prev_output_frame_idx_; // see init_publish_time_
   boost::mutex output_rate_mutex_;
-  std::string camera_ready_service_;
   std::string camera_imu_topic_;
   bool camera_is_master_;
+  bool use_time_synch_;
   ros::Time lastImageTimeStamp_;
-  unsigned int lastImuTimeStampSeq;
+
+  std::string triggerControlSrvName_;
+  bool ignoreTriggerResponse_;
+  ros::ServiceClient triggerControlClient_;
+  mavros_msgs::CommandTriggerControl triggerControlClientCall_;
 
   PID ocv_auto_exposure_pid_;
 
