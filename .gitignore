@@ -22,3 +22,5 @@ lib/
 doc/
 cfg/cpp/
 src/ueye_cam/
+CMakeLists.txt.user
+*.orig

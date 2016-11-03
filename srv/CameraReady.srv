@@ -1,0 +1,6 @@
+string camera_name # indicates which camera is ready
+float32 frame_rate # master camera is reporting frame rate in [Hz]
+bool is_master # not used yet. may be usefull for autorestart
+---
+bool success   # indicate successful run of triggered service
+string message # informational, e.g. for error messages
