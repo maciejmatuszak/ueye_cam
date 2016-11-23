@@ -147,7 +147,10 @@ UEyeCamNodelet::UEyeCamNodelet():
 UEyeCamNodelet::~UEyeCamNodelet() {
   disconnectCam();
 
-  setTriggerControl(false);
+  if(camera_is_master_)
+  {
+    setTriggerControl(false);
+  }
 
   // NOTE: sometimes deleting dynamic reconfigure object will lock up
   //       (suspect the scoped lock is not releasing the recursive mutex)
@@ -226,7 +229,10 @@ void UEyeCamNodelet::onInit() {
     triggerControlClient_ = nh.serviceClient<mavros_msgs::CommandTriggerControl>(triggerControlSrvName_);
 
     ros_timestamp_sub_ = nh.subscribe(camera_imu_topic_, 1, &UEyeCamNodelet::bufferTimestamp, this);
-    setTriggerControl(true);
+    if(camera_is_master_)
+    {
+        setTriggerControl(true);
+    }
   }
 
 
