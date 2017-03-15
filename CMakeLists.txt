@@ -111,7 +111,7 @@ target_link_libraries(${UEYECAM_LIB_NAME} ${catkin_LIBRARIES} ${UEYE_LIBRARY})
 
 add_library(${UEYECAM_NODELET_NAME} ${UEYECAM_NODELET_SOURCES} ${UEYECAM_NODELET_HEADERS})
 target_link_libraries(${UEYECAM_NODELET_NAME} ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})
-add_dependencies(${UEYECAM_NODELET_NAME} ${PROJECT_NAME}_gencfg)
+add_dependencies(${UEYECAM_NODELET_NAME} ${PROJECT_NAME}_generate_messages_cpp )
 
 add_executable(check_ueye_api src/check_ueye_api.cpp)
 target_link_libraries(check_ueye_api ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})
