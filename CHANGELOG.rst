@@ -2,6 +2,11 @@
 Changelog for package ueye_cam
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+1.0.16 (2017-01-02)
+-------------------
+* fixed crash on camera reconnect
+* Contributors: Anqi Xu, Christopher Wecht
+
 1.0.15 (2016-08-25)
 -------------------
 * recover + update from failure in setColorMode
