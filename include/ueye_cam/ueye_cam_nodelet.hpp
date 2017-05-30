@@ -184,7 +184,7 @@ protected:
      */
     bool fillMsgData (sensor_msgs::Image &img) const;
 
-    bool createImageCvPtr();
+    cv_bridge::CvImageConstPtr createImageCvPtr (sensor_msgs::ImagePtr img_cv_ptr);
     /**
      * Returns image's timestamp or current wall time if driver call fails.
      */
@@ -207,9 +207,9 @@ protected:
      * @param containerptr
      */
     void bufferTimestamp (const mavros_msgs::CamIMUStampPtr &msg);
-    void publishImages();
+    void publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr);
 
-    void optimizeCaptureParams();
+    void optimizeCaptureParams (sensor_msgs::ImagePtr imgPtr);
 
     /**
      * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
@@ -244,13 +244,13 @@ protected:
      */
     ros::Subscriber ros_timestamp_sub_;
 
-    // Used for synchronisation with IMU
-    ros::Time synch_time_stamp_msg_;
     //CV copy of the image message shared between rectification and adaptive exposure time algorithms
-    cv_bridge::CvImageConstPtr img_cv_ptr;
+    sensor_msgs::CameraInfoPtr cam_info_msg_ptr_;
 
-    sensor_msgs::ImagePtr img_msg_ptr;
-    sensor_msgs::CameraInfoPtr cam_info_msg_ptr;
+    typedef boost::shared_ptr<std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr>> ImagesPairPtr_t;
+    typedef boost::shared_ptr<ros::Time> RosTimePtr_t;
+    std::map<uint32_t, ImagesPairPtr_t> imageMap;
+    std::map<uint32_t, RosTimePtr_t> timeStampMap;
 
     unsigned int ros_frame_count_;
     ros::Publisher timeout_pub_;
@@ -287,6 +287,8 @@ protected:
     PID ocv_auto_exposure_pid_;
 
     bool cameraControl (ueye_cam::CameraControlRequest &reqPtr, ueye_cam::CameraControlResponse &respPtr);
+private:
+    void matchImages (uint32_t sequence);
 };
 
 

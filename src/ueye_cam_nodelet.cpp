@@ -137,7 +137,7 @@ UEyeCamNodelet::UEyeCamNodelet():
     cam_params_.ocv_auto_exposure_set_point = 2.0;
     cam_params_.ocv_auto_exposure_min = 0.01;
     cam_params_.ocv_auto_exposure_max = 20.0;
-    cam_info_msg_ptr = boost::make_shared<sensor_msgs::CameraInfo>();
+    cam_info_msg_ptr_ = boost::make_shared<sensor_msgs::CameraInfo>();
 }
 
 
@@ -1329,8 +1329,8 @@ INT UEyeCamNodelet::disconnectCam()
 //TODO: see if you can use shared pointers...
 bool UEyeCamNodelet::setCamInfo (sensor_msgs::SetCameraInfo::Request &req, sensor_msgs::SetCameraInfo::Response &rsp)
 {
-    cam_info_msg_ptr = boost::make_shared<sensor_msgs::CameraInfo> (req.camera_info);
-    cam_info_msg_ptr->header.frame_id = "/" + frame_name_;
+    cam_info_msg_ptr_ = boost::make_shared<sensor_msgs::CameraInfo> (req.camera_info);
+    cam_info_msg_ptr_->header.frame_id = "/" + frame_name_;
     rsp.success = saveIntrinsicsFile();
     rsp.status_message = (rsp.success) ?
                          "successfully wrote camera info to file" :
@@ -1451,8 +1451,9 @@ void UEyeCamNodelet::frameGrabLoop()
                 {
                     // Initialize shared pointers from member messages for nodelet intraprocess publishing
 
-                    img_msg_ptr = boost::make_shared<sensor_msgs::Image>();
-                    cam_info_msg_ptr = boost::make_shared<sensor_msgs::CameraInfo>();
+
+                    sensor_msgs::ImagePtr img_msg_ptr = boost::make_shared<sensor_msgs::Image>();
+                    sensor_msgs::CameraInfoPtr cam_info_msg_ptr = boost::make_shared<sensor_msgs::CameraInfo> (cam_info_msg_ptr_);
                     img_msg_ptr->is_bigendian = (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__);
                     img_msg_ptr->header.frame_id = frame_name_;
                     // Initialize/compute frame timestamp based on clock tick value from camera
@@ -1532,29 +1533,19 @@ void UEyeCamNodelet::frameGrabLoop()
                     // compute optimal params for next image frame
                     if (camera_is_master_ && cam_params_.ocv_auto_exposure && (ros_frame_count_ % cam_params_.ocv_auto_exposure_interval == 0))
                     {
-                        optimizeCaptureParams();
+                        optimizeCaptureParams (img_msg_ptr);
                     }
 
                     if (use_time_synch_)
                     {
-                        if (synch_time_stamp_msg_.isZero())
-                        {
-                            ROS_WARN_STREAM ("Missed IMU timestamp...");
-                        }
-                        else
-                        {
-                            //adjust the timestamp
-                            img_msg_ptr->header.stamp = cam_info_msg_ptr->header.stamp = synch_time_stamp_msg_;
-                            publishImages();
-                        }
+                        imageMap[img_msg_ptr->header.seq] = boost::make_shared<std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr>> (img_msg_ptr, cam_info_msg_ptr);
                     }
                     else
                     {
-                        publishImages();
+                        publishImages (img_msg_ptr, cam_info_msg_ptr);
                     }
                     //reset the pointers
                     img_msg_ptr = nullptr;
-                    img_cv_ptr = nullptr;
                     cam_info_msg_ptr = nullptr;
 
 
@@ -1606,6 +1597,36 @@ void UEyeCamNodelet::frameGrabLoop()
     DEBUG_STREAM ("Frame grabber loop terminated for [" << cam_name_ << "]");
 }
 
+
+void UEyeCamNodelet::matchImages (uint32_t sequence)
+{
+    auto imgPaitIt = imageMap.find (sequence);
+    if (imgPaitIt == imageMap.end())
+    {
+        return;
+    }
+    ImagesPairPtr_t pPtr = imgPaitIt->second;
+
+    auto tsIt = timeStampMap.find (sequence);
+    if (tsIt == timeStampMap.end())
+    {
+        return;
+    }
+
+    RosTimePtr_t tPtr = tsIt->second;
+
+    if (pPtr != NULL && tPtr != NULL)
+    {
+        pPtr->first->header.stamp.sec = tPtr->sec;
+        pPtr->first->header.stamp.nsec = tPtr->nsec;
+        pPtr->second->header.stamp.sec = tPtr->sec;
+        pPtr->second->header.stamp.nsec = tPtr->nsec;
+        imageMap.erase (imgPaitIt);
+        timeStampMap.erase (tsIt);
+
+    }
+
+}
 
 void UEyeCamNodelet::startFrameGrabber()
 {
@@ -1702,19 +1723,19 @@ void UEyeCamNodelet::loadIntrinsicsFile()
         cam_intr_filename_ = string (getenv ("HOME")) + "/.ros/camera_info/" + cam_name_ + ".yaml";
     }
 
-    if (camera_calibration_parsers::readCalibration (cam_intr_filename_, cam_name_, *cam_info_msg_ptr))
+    if (camera_calibration_parsers::readCalibration (cam_intr_filename_, cam_name_, *cam_info_msg_ptr_))
     {
 
-        camera_model_.fromCameraInfo (cam_info_msg_ptr);
+        camera_model_.fromCameraInfo (cam_info_msg_ptr_);
         ROS_INFO_STREAM ("Loaded intrinsics parameters for [" << cam_name_ << "]");
     }
-    cam_info_msg_ptr->header.frame_id = "/" + frame_name_;
+    cam_info_msg_ptr_->header.frame_id = "/" + frame_name_;
 }
 
 
 bool UEyeCamNodelet::saveIntrinsicsFile()
 {
-    if (camera_calibration_parsers::writeCalibration (cam_intr_filename_, cam_name_, *cam_info_msg_ptr))
+    if (camera_calibration_parsers::writeCalibration (cam_intr_filename_, cam_name_, *cam_info_msg_ptr_))
     {
         DEBUG_STREAM ("Saved intrinsics parameters for [" << cam_name_ <<
                       "] to " << cam_intr_filename_);
@@ -1761,17 +1782,17 @@ void UEyeCamNodelet::handleTimeout()
 
 void UEyeCamNodelet::bufferTimestamp (const mavros_msgs::CamIMUStampPtr &timeStampPtr)
 {
+    RosTimePtr_t tsPtr = boost::make_shared<ros::Time> (timeStampPtr->frame_stamp.sec, timeStampPtr->frame_stamp.nsec);
     ROS_DEBUG_STREAM ("bufferTimestamp; new  ; seq: " << timeStampPtr->frame_seq_id);
-    synch_time_stamp_msg_.sec = timeStampPtr->frame_stamp.sec;
-    synch_time_stamp_msg_.nsec = timeStampPtr->frame_stamp.nsec;
+    //TODO: with long enough time this may be a problem if int seq will rollover and become negative.
+    timeStampMap[static_cast<uint32_t> (timeStampPtr->frame_seq_id)] = tsPtr;
 }
 
 
-void UEyeCamNodelet::publishImages()
+void UEyeCamNodelet::publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr)
 {
-
-    //ROS_DEBUG_STREAM("publishImages:publishing image_raw");
-    ros_cam_pub_.publish (img_msg_ptr, cam_info_msg_ptr);
+    //TODO: should we check for subscribers???
+    ros_cam_pub_.publish (imgPtr, infoPtr);
 
 
     //if noone is interested in cectified image lets skip it
@@ -1789,7 +1810,8 @@ void UEyeCamNodelet::publishImages()
     }
 
 
-    if (createImageCvPtr() == false )
+    cv_bridge::CvImageConstPtr cvImgPtr = createImageCvPtr (imgPtr);
+    if (cvImgPtr == NULL)
     {
         return;
     }
@@ -1797,11 +1819,11 @@ void UEyeCamNodelet::publishImages()
     // Rectify image
     cv::Mat frame_rect;
     //ROS_DEBUG_STREAM("publishImages: rectification...");
-    camera_model_.rectifyImage (img_cv_ptr->image, frame_rect, cv::INTER_LINEAR);
+    camera_model_.rectifyImage (cvImgPtr->image, frame_rect, cv::INTER_LINEAR);
 
     // Publish rectified image
     //ROS_DEBUG_STREAM("publishImages: publishing rectified...");
-    sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage (img_msg_ptr->header, img_msg_ptr->encoding, frame_rect).toImageMsg();
+    sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage (imgPtr->header, imgPtr->encoding, frame_rect).toImageMsg();
     ros_rect_pub_.publish (rect_msg);
 }
 
@@ -1844,27 +1866,25 @@ void UEyeCamNodelet::setSlaveExposure (const ueye_cam::ExposurePtr &msgPtr)
     }
 }
 
-bool UEyeCamNodelet::createImageCvPtr()
+cv_bridge::CvImageConstPtr UEyeCamNodelet::createImageCvPtr (sensor_msgs::ImagePtr imgPtr)
 {
-    if (img_cv_ptr == nullptr)
+
+    try
     {
-        try
-        {
-            img_cv_ptr = cv_bridge::toCvShare (img_msg_ptr, img_msg_ptr->encoding);
-        }
-        catch (cv_bridge::Exception &e)
-        {
-            ROS_ERROR ("Failed to create cv version of a image: %s", e.what());
-            return false;
-        }
+        return cv_bridge::toCvShare (imgPtr, imgPtr->encoding);
     }
-    return true;
+    catch (cv_bridge::Exception &e)
+    {
+        ROS_ERROR ("Failed to create cv version of a image: %s", e.what());
+        return NULL;
+    }
 }
 
-void UEyeCamNodelet::optimizeCaptureParams()
+void UEyeCamNodelet::optimizeCaptureParams (sensor_msgs::ImagePtr imgPtr)
 {
 
-    if (createImageCvPtr() == false)
+    cv_bridge::CvImageConstPtr cvImgPtr = createImageCvPtr (imgPtr);
+    if (cvImgPtr == NULL)
     {
         return;
     }
@@ -1876,7 +1896,7 @@ void UEyeCamNodelet::optimizeCaptureParams()
     cv::Mat hist ;
 
     //TODO: Should the number of channels differ for non mono image???
-    cv::calcHist (&img_cv_ptr->image, 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
+    cv::calcHist (& (cvImgPtr->image), 1, 0, cv::Mat(), hist, 1, &histSize, &histRange, true, false);
     cv::normalize (hist, hist, 1.0, 0, cv::NORM_L1); // TODO : check normalization
 
     double j = 0, k = 0;
@@ -1896,7 +1916,7 @@ void UEyeCamNodelet::optimizeCaptureParams()
     // Calculate mean sample value
     double msv = j / k;
 
-    double delta =  ocv_auto_exposure_pid_.calculateAsynch (cam_params_.ocv_auto_exposure_set_point, msv, img_msg_ptr->header.stamp.toSec());
+    double delta =  ocv_auto_exposure_pid_.calculateAsynch (cam_params_.ocv_auto_exposure_set_point, msv, imgPtr->header.stamp.toSec());
 
     cam_params_.exposure += delta;
 
