@@ -1,4 +1,4 @@
-#include "ueye_cam/ueyecamsynchmanager.hpp"
+#include "ueye_cam/ueye_cam_synch_nodelet.hpp"
 #include "ueye_cam/CameraControl.h"
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/split.hpp>
@@ -161,6 +161,7 @@ bool UeyeCamSynchNodelet::sendCameraTriggerControl (bool enable)
     }
 }
 
-}
+} //namespace
+
 #include <pluginlib/class_list_macros.h>
 PLUGINLIB_EXPORT_CLASS (ueye_cam::UeyeCamSynchNodelet, nodelet::Nodelet)
