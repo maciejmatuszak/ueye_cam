@@ -58,8 +58,6 @@ endif()
 
 set(UEYECAM_NODELET_NAME ueye_cam_nodelet)
 
-set(UEYECAM_SYNC_MGR_NODELET_NAME ueye_cam_synch_nodelet)
-
 set(UEYECAM_LIB_NAME ueye_wrapper)
 
 set(UEYECAM_LIB_SOURCES
@@ -73,20 +71,14 @@ set(UEYECAM_LIB_HEADERS
 
 set(UEYECAM_NODELET_SOURCES
   src/ueye_cam_nodelet.cpp
+  src/ueye_cam_synch_nodelet.cpp
   src/pid.cpp
 )
 
 set(UEYECAM_NODELET_HEADERS
   include/ueye_cam/ueye_cam_nodelet.hpp
+  include/ueye_cam/ueye_cam_synch_nodelet.hpp
   include/ueye_cam/pid.hpp
-)
-
-set(UEYECAM_SYNCH_MGR_NODELET_SOURCES
-  src/ueyecamsynchmanager.cpp
-)
-
-set(UEYECAM_SYNCH_MGR_NODELET_HEADERS
-  include/ueye_cam/ueyecamsynchmanager.hpp
 )
 
 add_message_files(DIRECTORY msg
@@ -120,13 +112,9 @@ include_directories(
 add_library(${UEYECAM_LIB_NAME} ${UEYECAM_LIB_SOURCES} ${UEYECAM_LIB_HEADERS})
 target_link_libraries(${UEYECAM_LIB_NAME} ${catkin_LIBRARIES} ${UEYE_LIBRARY})
 
-add_library(${UEYECAM_NODELET_NAME} ${UEYECAM_NODELET_SOURCES} ${UEYECAM_SYNCH_MGR_NODELET_HEADERS})
+add_library(${UEYECAM_NODELET_NAME} ${UEYECAM_NODELET_SOURCES} ${UEYECAM_NODELET_HEADERS})
 target_link_libraries(${UEYECAM_NODELET_NAME} ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})
 add_dependencies(${UEYECAM_NODELET_NAME} ${PROJECT_NAME}_gencfg ${PROJECT_NAME}_generate_messages_cpp)
-
-add_library(${UEYECAM_SYNC_MGR_NODELET_NAME} ${UEYECAM_SYNCH_MGR_NODELET_SOURCES} ${UEYECAM_NODELET_HEADERS})
-target_link_libraries(${UEYECAM_SYNC_MGR_NODELET_NAME} ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})
-add_dependencies(${UEYECAM_SYNC_MGR_NODELET_NAME} ${PROJECT_NAME}_gencfg ${PROJECT_NAME}_generate_messages_cpp)
 
 add_executable(check_ueye_api src/check_ueye_api.cpp)
 target_link_libraries(check_ueye_api ${catkin_LIBRARIES} ${UEYECAM_LIB_NAME})

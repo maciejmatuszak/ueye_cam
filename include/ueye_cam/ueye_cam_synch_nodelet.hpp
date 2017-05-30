@@ -1,5 +1,5 @@
-#ifndef UEYECAMSYNCHMANAGER_HPP
-#define UEYECAMSYNCHMANAGER_HPP
+#ifndef UEYECAM_SYNCH_NODELET_HPP
+#define UEYECAM_SYNCH_NODELET_HPP
 #include <nodelet/nodelet.h>
 #include <ros/ros.h>
 #include <mavros_msgs/CommandTriggerControl.h>
@@ -9,7 +9,7 @@ namespace ueye_cam
 {
 using namespace std;
 
-class UeyeCamSynchManager: public nodelet::Nodelet
+class UeyeCamSynchNodelet: public nodelet::Nodelet
 {
 public:
     const string      DEFAULT_MASTER_EXPOSURE_TOPIC = "/cam0/exposure";
@@ -18,8 +18,8 @@ public:
     const bool        DEFAULT_TRIGGER_CONTROL_SRV_IGNORE_RESP = false;
     const double      DEFAULT_FRAME_RATE = 20.0;
 
-    UeyeCamSynchManager();
-    virtual ~UeyeCamSynchManager();
+    UeyeCamSynchNodelet();
+    virtual ~UeyeCamSynchNodelet();
 
     // Nodelet interface
 private:
@@ -43,4 +43,4 @@ private:
 };
 
 }
-#endif // UEYECAMSYNCHMANAGER_HPP
+#endif // UEYECAM_SYNCH_NODELET_HPP

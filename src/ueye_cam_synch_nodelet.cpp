@@ -9,12 +9,13 @@ namespace ueye_cam
 {
 using namespace std;
 
-UeyeCamSynchManager::UeyeCamSynchManager()
+UeyeCamSynchNodelet::UeyeCamSynchNodelet():
+    nodelet::Nodelet ()
 {
 
 }
 
-void UeyeCamSynchManager::onInit()
+void UeyeCamSynchNodelet::onInit()
 {
     ros::NodeHandle &nh = getNodeHandle();
     ros::NodeHandle &local_nh = getPrivateNodeHandle();
@@ -24,7 +25,7 @@ void UeyeCamSynchManager::onInit()
 
 
     local_nh.param<double> ("frame_rate", mFrameRate, DEFAULT_FRAME_RATE );
-    local_nh.param<string> ("master_exposure_topic", mMasterExposureTopic, DEFAULT_TRIGGER_CONTROL_SRV_NAME );
+    local_nh.param<string> ("master_exposure_topic", mMasterExposureTopic, DEFAULT_MASTER_EXPOSURE_TOPIC );
     local_nh.param<string> ("trigger_control_srv", triggerControlSrvName, DEFAULT_TRIGGER_CONTROL_SRV_NAME );
     local_nh.param<bool> ("trigger_control_ignore_response", mIgnoreCameraTriggerResponse, DEFAULT_TRIGGER_CONTROL_SRV_IGNORE_RESP );
 
@@ -39,7 +40,7 @@ void UeyeCamSynchManager::onInit()
 
     mCameraTriggerControlClient = nh.serviceClient<mavros_msgs::CommandTriggerControl> (triggerControlSrvName);
 
-    mMasterExposureSubscriber = nh.subscribe (mMasterExposureTopic, 1, &UeyeCamSynchManager::masterExposureHandler, this);
+    mMasterExposureSubscriber = nh.subscribe (mMasterExposureTopic, 1, &UeyeCamSynchNodelet::masterExposureHandler, this);
 
     bool result = true;
     result = waitForAllCameras();
@@ -61,7 +62,7 @@ void UeyeCamSynchManager::onInit()
 
 
 
-void UeyeCamSynchManager::masterExposureHandler (const ueye_cam::ExposureConstPtr &masterExposurePtr)
+void UeyeCamSynchNodelet::masterExposureHandler (const ueye_cam::ExposureConstPtr &masterExposurePtr)
 {
     BOOST_FOREACH (const string camName, mCameraControlClients | boost::adaptors::map_keys)
     {
@@ -77,7 +78,7 @@ void UeyeCamSynchManager::masterExposureHandler (const ueye_cam::ExposureConstPt
     }
 }
 
-bool UeyeCamSynchManager::waitForAllCameras ()
+bool UeyeCamSynchNodelet::waitForAllCameras ()
 {
     BOOST_FOREACH (const string camName, mCameraControlClients | boost::adaptors::map_keys)
     {
@@ -94,7 +95,7 @@ bool UeyeCamSynchManager::waitForAllCameras ()
 }
 
 
-bool UeyeCamSynchManager::resetAllCameras ()
+bool UeyeCamSynchNodelet::resetAllCameras ()
 {
     CameraControl svcCall;
     //stop all cameras
@@ -127,7 +128,7 @@ bool UeyeCamSynchManager::resetAllCameras ()
 }
 
 
-bool UeyeCamSynchManager::sendCameraTriggerControl (bool enable)
+bool UeyeCamSynchNodelet::sendCameraTriggerControl (bool enable)
 {
     bool result = false;
 
@@ -162,4 +163,4 @@ bool UeyeCamSynchManager::sendCameraTriggerControl (bool enable)
 
 }
 #include <pluginlib/class_list_macros.h>
-PLUGINLIB_EXPORT_CLASS (ueye_cam::UeyeCamSynchManager, nodelet::Nodelet)
+PLUGINLIB_EXPORT_CLASS (ueye_cam::UeyeCamSynchNodelet, nodelet::Nodelet)
