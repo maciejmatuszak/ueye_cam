@@ -47,7 +47,6 @@
 
 #include "ueye_cam/ueye_cam_nodelet.hpp"
 #include <cstdlib> // needed for getenv()
-#include <ros/package.h>
 #include <camera_calibration_parsers/parse.h>
 #include <std_msgs/UInt64.h>
 #include <sensor_msgs/fill_image.h>
@@ -285,6 +284,12 @@ bool UEyeCamNodelet::cameraControl (ueye_cam::CameraControlRequest &req, ueye_ca
         {
             resp.message = "Failed to set camera exposure";
         }
+        break;
+    case CameraControlRequest::ACTION_SET_EXTERNAL_TRIGGER:
+        cam_params_.ext_trigger_mode = req.arg1 == 0 ? false : true;
+        stopFrameGrabber();
+        startFrameGrabber();
+        resp.success = true;
         break;
     default:
         resp.success = false;

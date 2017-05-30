@@ -20,10 +20,11 @@ public:
 
     UeyeCamSynchNodelet();
     virtual ~UeyeCamSynchNodelet();
+    virtual void onInit();
 
     // Nodelet interface
 private:
-    void onInit();
+
 
     //PX4 camera trigger service
     bool mIgnoreCameraTriggerResponse;

@@ -10,7 +10,11 @@ namespace ueye_cam
 using namespace std;
 
 UeyeCamSynchNodelet::UeyeCamSynchNodelet():
-    nodelet::Nodelet ()
+    nodelet::Nodelet()
+{
+
+}
+UeyeCamSynchNodelet::~UeyeCamSynchNodelet()
 {
 
 }
@@ -43,12 +47,14 @@ void UeyeCamSynchNodelet::onInit()
     mMasterExposureSubscriber = nh.subscribe (mMasterExposureTopic, 1, &UeyeCamSynchNodelet::masterExposureHandler, this);
 
     bool result = true;
+    sendCameraTriggerControl (false);
     result = waitForAllCameras();
     if (result == false)
     {
         ROS_FATAL_STREAM ("Failed to wait for all cameras");
         exit (-1);
     }
+    ROS_INFO_STREAM ("All cameras present");
 
     result = resetAllCameras();
     if (result == false)
@@ -56,8 +62,8 @@ void UeyeCamSynchNodelet::onInit()
         ROS_FATAL_STREAM ("Failed to reset all cameras");
         exit (-2);
     }
-    ros::spin();
-
+    ROS_INFO_STREAM ("All cameras reseted");
+    sendCameraTriggerControl (true);
 }
 
 
