@@ -273,6 +273,7 @@ bool UEyeCamNodelet::cameraControl (ueye_cam::CameraControlRequest &req, ueye_ca
         resp.success = true;
         break;
     case CameraControlRequest::ACTION_START:
+        ros_frame_count_ = 0;
         startFrameGrabber();
         resp.success = true;
         break;
@@ -1453,7 +1454,7 @@ void UEyeCamNodelet::frameGrabLoop()
 
 
                     sensor_msgs::ImagePtr img_msg_ptr = boost::make_shared<sensor_msgs::Image>();
-                    sensor_msgs::CameraInfoPtr cam_info_msg_ptr = boost::make_shared<sensor_msgs::CameraInfo> (cam_info_msg_ptr_);
+                    sensor_msgs::CameraInfoPtr cam_info_msg_ptr = boost::make_shared<sensor_msgs::CameraInfo> (*cam_info_msg_ptr_);
                     img_msg_ptr->is_bigendian = (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__);
                     img_msg_ptr->header.frame_id = frame_name_;
                     // Initialize/compute frame timestamp based on clock tick value from camera
@@ -1538,7 +1539,9 @@ void UEyeCamNodelet::frameGrabLoop()
 
                     if (use_time_synch_)
                     {
+                        ROS_INFO_STREAM ("Image Received; seq:" << img_msg_ptr->header.seq);
                         imageMap[img_msg_ptr->header.seq] = boost::make_shared<std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr>> (img_msg_ptr, cam_info_msg_ptr);
+                        matchImages (img_msg_ptr->header.seq);
                     }
                     else
                     {
@@ -1600,30 +1603,33 @@ void UEyeCamNodelet::frameGrabLoop()
 
 void UEyeCamNodelet::matchImages (uint32_t sequence)
 {
-    auto imgPaitIt = imageMap.find (sequence);
-    if (imgPaitIt == imageMap.end())
+    ROS_INFO_STREAM ("Matching Images; seq:" << sequence);
+    auto imgPairIterator = imageMap.find (sequence);
+    if (imgPairIterator == imageMap.end())
     {
+        ROS_INFO_STREAM ("Matching Images; No Images found");
         return;
     }
-    ImagesPairPtr_t pPtr = imgPaitIt->second;
+    ImagesPairPtr_t pPtr = imgPairIterator->second;
 
-    auto tsIt = timeStampMap.find (sequence);
-    if (tsIt == timeStampMap.end())
+    auto timeStampIterator = timeStampMap.find (sequence);
+    if (timeStampIterator == timeStampMap.end())
     {
+        ROS_INFO_STREAM ("Matching Images; No TimeStamp found");
         return;
     }
-
-    RosTimePtr_t tPtr = tsIt->second;
+    RosTimePtr_t tPtr = timeStampIterator->second;
 
     if (pPtr != NULL && tPtr != NULL)
     {
+        ROS_INFO_STREAM ("Matching Images; Match found...publishing");
         pPtr->first->header.stamp.sec = tPtr->sec;
         pPtr->first->header.stamp.nsec = tPtr->nsec;
         pPtr->second->header.stamp.sec = tPtr->sec;
         pPtr->second->header.stamp.nsec = tPtr->nsec;
-        imageMap.erase (imgPaitIt);
-        timeStampMap.erase (tsIt);
-
+        imageMap.erase (imgPairIterator);
+        timeStampMap.erase (timeStampIterator);
+        publishImages (pPtr->first, pPtr->second);
     }
 
 }
@@ -1783,48 +1789,49 @@ void UEyeCamNodelet::handleTimeout()
 void UEyeCamNodelet::bufferTimestamp (const mavros_msgs::CamIMUStampPtr &timeStampPtr)
 {
     RosTimePtr_t tsPtr = boost::make_shared<ros::Time> (timeStampPtr->frame_stamp.sec, timeStampPtr->frame_stamp.nsec);
-    ROS_DEBUG_STREAM ("bufferTimestamp; new  ; seq: " << timeStampPtr->frame_seq_id);
+    ROS_INFO_STREAM ("bufferTimestamp; new  ; seq: " << timeStampPtr->frame_seq_id);
     //TODO: with long enough time this may be a problem if int seq will rollover and become negative.
-    timeStampMap[static_cast<uint32_t> (timeStampPtr->frame_seq_id)] = tsPtr;
+    uint32_t seq = static_cast<uint32_t> (timeStampPtr->frame_seq_id);
+    timeStampMap[seq] = tsPtr;
+    matchImages (seq);
 }
 
 
 void UEyeCamNodelet::publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr)
 {
-    //TODO: should we check for subscribers???
-    ros_cam_pub_.publish (imgPtr, infoPtr);
-
+    if (ros_cam_pub_.getNumSubscribers() > 0)
+    {
+        ros_cam_pub_.publish (imgPtr, infoPtr);
+    }
 
     //if noone is interested in cectified image lets skip it
-    if (ros_rect_pub_.getNumSubscribers() == 0)
+    if (ros_rect_pub_.getNumSubscribers() > 0)
     {
-        return;
+        //We can not run without camera info intrinsics
+        if (!camera_model_.initialized())
+        {
+            //lets be polite and tell the user something is wrong
+            ROS_WARN_ONCE ("A node subscribed to rectified image topic but no camera info was configured!!! No image will be published");
+            return;
+        }
+
+
+        cv_bridge::CvImageConstPtr cvImgPtr = createImageCvPtr (imgPtr);
+        if (cvImgPtr == NULL)
+        {
+            return;
+        }
+
+        // Rectify image
+        cv::Mat frame_rect;
+        //ROS_DEBUG_STREAM("publishImages: rectification...");
+        camera_model_.rectifyImage (cvImgPtr->image, frame_rect, cv::INTER_LINEAR);
+
+        // Publish rectified image
+        //ROS_DEBUG_STREAM("publishImages: publishing rectified...");
+        sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage (imgPtr->header, imgPtr->encoding, frame_rect).toImageMsg();
+        ros_rect_pub_.publish (rect_msg);
     }
-
-    //We can not run without camera info intrinsics
-    if (!camera_model_.initialized())
-    {
-        //lets be polite and tell the user something is wrong
-        ROS_WARN_ONCE ("A node subscribed to rectified image topic but no camera info was configured!!! No image will be published");
-        return;
-    }
-
-
-    cv_bridge::CvImageConstPtr cvImgPtr = createImageCvPtr (imgPtr);
-    if (cvImgPtr == NULL)
-    {
-        return;
-    }
-
-    // Rectify image
-    cv::Mat frame_rect;
-    //ROS_DEBUG_STREAM("publishImages: rectification...");
-    camera_model_.rectifyImage (cvImgPtr->image, frame_rect, cv::INTER_LINEAR);
-
-    // Publish rectified image
-    //ROS_DEBUG_STREAM("publishImages: publishing rectified...");
-    sensor_msgs::ImagePtr rect_msg = cv_bridge::CvImage (imgPtr->header, imgPtr->encoding, frame_rect).toImageMsg();
-    ros_rect_pub_.publish (rect_msg);
 }
 
 void UEyeCamNodelet::sendSlaveExposure (float exposure)
