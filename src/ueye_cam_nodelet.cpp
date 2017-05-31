@@ -271,11 +271,13 @@ bool UEyeCamNodelet::cameraControl (ueye_cam::CameraControlRequest &req, ueye_ca
     case CameraControlRequest::ACTION_STOP:
         stopFrameGrabber();
         resp.success = true;
+        ROS_INFO_STREAM ("CAMERA CONTROL: STOP");
         break;
     case CameraControlRequest::ACTION_START:
         ros_frame_count_ = 0;
         startFrameGrabber();
         resp.success = true;
+        ROS_INFO_STREAM ("CAMERA CONTROL: START");
         break;
     case CameraControlRequest::ACTION_SET_EXPOSURE:
         cam_params_.auto_exposure = false;
@@ -285,12 +287,14 @@ bool UEyeCamNodelet::cameraControl (ueye_cam::CameraControlRequest &req, ueye_ca
         {
             resp.message = "Failed to set camera exposure";
         }
+        ROS_INFO_STREAM ("CAMERA CONTROL: SET EXPOSURE");
         break;
     case CameraControlRequest::ACTION_SET_EXTERNAL_TRIGGER:
         cam_params_.ext_trigger_mode = req.arg1 == 0 ? false : true;
         stopFrameGrabber();
         startFrameGrabber();
         resp.success = true;
+        ROS_INFO_STREAM ("CAMERA CONTROL: SET_EXTERNAL_TRIGGER");
         break;
     default:
         resp.success = false;
