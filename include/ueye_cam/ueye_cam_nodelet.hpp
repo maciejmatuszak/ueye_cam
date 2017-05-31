@@ -252,7 +252,7 @@ protected:
     std::map<uint32_t, ImagesPairPtr_t> imageMap;
     std::map<uint32_t, RosTimePtr_t> timeStampMap;
 
-    unsigned int ros_frame_count_;
+    unsigned int imageSeq_;
     ros::Publisher timeout_pub_;
     unsigned long long int timeout_count_;
 
@@ -280,8 +280,9 @@ protected:
     std::string camera_imu_topic_;
     bool camera_is_master_;
     bool use_time_synch_;
-    ros::Time lastImageTimeStamp_;
+    double lastImageTimeStampSec_;
 
+    uint32_t lastTimeStampSeq_;
     ros::ServiceServer cameraControlServer_;
 
     PID ocv_auto_exposure_pid_;

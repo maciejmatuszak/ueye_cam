@@ -16,7 +16,12 @@ UeyeCamSynchNodelet::UeyeCamSynchNodelet():
 }
 UeyeCamSynchNodelet::~UeyeCamSynchNodelet()
 {
-
+    sendCameraTriggerControl (false);
+    mStopThread = true;
+    if (mSynchThread.joinable())
+    {
+        mSynchThread.join();
+    }
 }
 
 void UeyeCamSynchNodelet::onInit()
@@ -38,32 +43,18 @@ void UeyeCamSynchNodelet::onInit()
     BOOST_FOREACH (const string & camName, camNamesV)
     {
         ROS_INFO_STREAM ("Camera:" << camName << " creating control service client");
-        ros::ServiceClient sc = nh.serviceClient<ueye_cam::CameraControl> ("/" + camName + "/camera_control");
+        ros::ServiceClient sc = getMTNodeHandle().serviceClient<ueye_cam::CameraControl> ("/" + camName + "/camera_control");
         mCameraControlClients[camName] = sc;
     }
 
-    mCameraTriggerControlClient = nh.serviceClient<mavros_msgs::CommandTriggerControl> (triggerControlSrvName);
+    mCameraTriggerControlClient = getMTNodeHandle().serviceClient<mavros_msgs::CommandTriggerControl> (triggerControlSrvName);
 
     mMasterExposureSubscriber = nh.subscribe (mMasterExposureTopic, 1, &UeyeCamSynchNodelet::masterExposureHandler, this);
+    mStopThread = false;
 
-    bool result = true;
-    sendCameraTriggerControl (false);
-    result = waitForAllCameras();
-    if (result == false)
-    {
-        ROS_FATAL_STREAM ("Failed to wait for all cameras");
-        exit (-1);
-    }
-    ROS_INFO_STREAM ("All cameras present");
+    mSynchThread = thread (bind (&UeyeCamSynchNodelet::SynchThread, this));
 
-    result = resetAllCameras();
-    if (result == false)
-    {
-        ROS_FATAL_STREAM ("Failed to reset all cameras");
-        exit (-2);
-    }
-    ROS_INFO_STREAM ("All cameras reseted");
-    sendCameraTriggerControl (true);
+
 }
 
 
@@ -138,8 +129,9 @@ bool UeyeCamSynchNodelet::sendCameraTriggerControl (bool enable)
 {
     bool result = false;
 
-
-    mCameraTriggerCall.request.cycle_time = static_cast<float> (enable ? (1000.0 / mFrameRate) : 0.0);
+    //Due to changes in PX4/mavling (no mavros yet) trigger control the cycle_time is mapped to "reset sequence"!!! F!
+    //mCameraTriggerCall.request.cycle_time = static_cast<float> (enable ? (1000.0 / mFrameRate) : 0.0);
+    mCameraTriggerCall.request.cycle_time = enable ? 1 : 0;
     mCameraTriggerCall.request.trigger_enable = enable;
     ROS_INFO ("Calling trigger control service: trigger_enable=%s; cycle_time=%f[ms]",
               (enable ? "true" : "false"),
@@ -167,7 +159,45 @@ bool UeyeCamSynchNodelet::sendCameraTriggerControl (bool enable)
     }
 }
 
+
+void UeyeCamSynchNodelet::SynchThread()
+{
+
+
+    bool result = true;
+    sendCameraTriggerControl (false);
+
+    result = waitForAllCameras();
+    if (result == false)
+    {
+        ROS_FATAL_STREAM ("Failed to wait for all cameras");
+        exit (-1);
+    }
+    ROS_INFO_STREAM ("All cameras present");
+
+    result = resetAllCameras();
+    if (result == false)
+    {
+        ROS_FATAL_STREAM ("Failed to reset all cameras");
+        exit (-2);
+    }
+    ROS_INFO_STREAM ("All cameras reseted");
+    sendCameraTriggerControl (true);
+
+
+    ros::Rate rate (1);
+    while (ros::ok() && (mStopThread == false))
+    {
+        rate.sleep();
+
+    }
+
+}
+
+
 } //namespace
+
+
 
 #include <pluginlib/class_list_macros.h>
 PLUGINLIB_EXPORT_CLASS (ueye_cam::UeyeCamSynchNodelet, nodelet::Nodelet)

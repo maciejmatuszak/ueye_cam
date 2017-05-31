@@ -3,6 +3,7 @@
 #include <nodelet/nodelet.h>
 #include <ros/ros.h>
 #include <mavros_msgs/CommandTriggerControl.h>
+#include <thread>
 #include "ueye_cam/Exposure.h"
 
 namespace ueye_cam
@@ -26,6 +27,7 @@ public:
 private:
 
 
+    thread mSynchThread;
     //PX4 camera trigger service
     bool mIgnoreCameraTriggerResponse;
     ros::ServiceClient mCameraTriggerControlClient;
@@ -41,6 +43,8 @@ private:
     void masterExposureHandler (const ueye_cam::ExposureConstPtr &masterExposurePtr);
     bool resetAllCameras();
     bool waitForAllCameras();
+    void SynchThread();
+    bool mStopThread;
 };
 
 }
