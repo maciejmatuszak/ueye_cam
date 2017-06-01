@@ -207,7 +207,7 @@ protected:
      * @param containerptr
      */
     void bufferTimestamp (const mavros_msgs::CamIMUStampPtr &msg);
-    void publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr);
+    void publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr, mavros_msgs::CamIMUStampPtr timeStampPtr);
 
     void optimizeCaptureParams (sensor_msgs::ImagePtr imgPtr);
 
@@ -247,10 +247,13 @@ protected:
     //CV copy of the image message shared between rectification and adaptive exposure time algorithms
     sensor_msgs::CameraInfoPtr cam_info_msg_ptr_;
 
-    typedef boost::shared_ptr<std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr>> ImagesPairPtr_t;
-    typedef boost::shared_ptr<ros::Time> RosTimePtr_t;
-    std::map<uint32_t, ImagesPairPtr_t> imageMap;
-    std::map<uint32_t, RosTimePtr_t> timeStampMap;
+    typedef std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr> CompletteImage_t;
+    typedef boost::shared_ptr<CompletteImage_t> CompletteImagePtr_t;
+    std::vector<CompletteImagePtr_t> mImageBuffer;
+    std::vector<mavros_msgs::CamIMUStampPtr> mTimeStampBuffer;
+
+    boost::mutex mImageBufferMutex;
+    boost::mutex mTimeStampBufferMutex;
 
     unsigned int imageSeq_;
     ros::Publisher timeout_pub_;
@@ -289,8 +292,10 @@ protected:
 
     bool cameraControl (ueye_cam::CameraControlRequest &reqPtr, ueye_cam::CameraControlResponse &respPtr);
 private:
-    void matchImages (uint32_t sequence);
-    void cleanBufferMaps (uint32_t sequence);
+    mavros_msgs::CamIMUStampPtr  findTimeStamp (int32_t sequence);
+    UEyeCamNodelet::CompletteImagePtr_t findImage (uint32_t sequence);
+
+    void cleanBuffers (uint32_t sizeLimit);
 };
 
 

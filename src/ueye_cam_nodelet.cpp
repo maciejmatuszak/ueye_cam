@@ -283,8 +283,14 @@ bool UEyeCamNodelet::cameraControl (ueye_cam::CameraControlRequest &req, ueye_ca
         {
             mNextTsSeq_ = 0;
             imageSeq_ = 0;
-            imageMap.clear();
-            timeStampMap.clear();
+            mImageBufferMutex.lock();
+            mImageBuffer.clear();
+            mImageBufferMutex.unlock();
+
+            mTimeStampBufferMutex.lock();
+            mTimeStampBuffer.clear();
+            mTimeStampBufferMutex.unlock();
+
             if (cam_params_.ext_trigger_mode)
             {
                 if (setExtTriggerMode() != IS_SUCCESS)
@@ -1568,8 +1574,22 @@ void UEyeCamNodelet::frameGrabLoop()
 
                     if (use_time_synch_)
                     {
+
                         //ROS_INFO_STREAM ("Image Received; seq:" << img_msg_ptr->header.seq);
-                        imageMap[img_msg_ptr->header.seq] = boost::make_shared<std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr>> (img_msg_ptr, cam_info_msg_ptr);
+                        auto timeStampMsgPtr = findTimeStamp (img_msg_ptr->header.seq);
+                        if (timeStampMsgPtr == NULL)
+                        {
+                            // buffer for later
+                            mImageBufferMutex.lock();
+                            mImageBuffer.push_back (boost::make_shared<CompletteImage_t> (img_msg_ptr, cam_info_msg_ptr));
+                            mImageBufferMutex.unlock();
+                        }
+                        else
+                        {
+                            //found match update timestamp and publish
+                            publishImages (img_msg_ptr, cam_info_msg_ptr, timeStampMsgPtr);
+                        }
+
 
                         double timeDif = img_msg_ptr->header.stamp.toSec() - lastImageTimeStampSec_;
                         //ecpected is interval + 5%
@@ -1579,12 +1599,11 @@ void UEyeCamNodelet::frameGrabLoop()
                             ROS_WARN_STREAM ("Missed image! Time since last frame:" << timeDif << "; expected + 5% :" << expectedTime);
                         }
                         lastImageTimeStampSec_ = img_msg_ptr->header.stamp.toSec();
-
-                        matchImages (img_msg_ptr->header.seq);
+                        cleanBuffers (1);
                     }
                     else
                     {
-                        publishImages (img_msg_ptr, cam_info_msg_ptr);
+                        publishImages (img_msg_ptr, cam_info_msg_ptr, NULL);
                     }
                     //reset the pointers
                     img_msg_ptr = nullptr;
@@ -1640,71 +1659,63 @@ void UEyeCamNodelet::frameGrabLoop()
 }
 
 
-void UEyeCamNodelet::matchImages (uint32_t sequence)
+mavros_msgs::CamIMUStampPtr UEyeCamNodelet::findTimeStamp (int32_t sequence)
 {
-    //ROS_INFO_STREAM ("Matching Images; seq:" << sequence);
-    auto imgPairIterator = imageMap.find (sequence);
-    if (imgPairIterator == imageMap.end())
+    mavros_msgs::CamIMUStampPtr ptr = NULL;
+    mTimeStampBufferMutex.lock();
+    for (auto it = mTimeStampBuffer.cbegin(); it != mTimeStampBuffer.cend() /* not hoisted */; /* no increment */)
     {
-        //ROS_INFO_STREAM ("Matching Images; No Images found");
-        return;
-    }
-    ImagesPairPtr_t pPtr = imgPairIterator->second;
 
-    auto timeStampIterator = timeStampMap.find (sequence);
-    if (timeStampIterator == timeStampMap.end())
-    {
-        //ROS_INFO_STREAM ("Matching Images; No TimeStamp found");
-        return;
-    }
-    RosTimePtr_t tPtr = timeStampIterator->second;
-
-    if (pPtr != NULL && tPtr != NULL)
-    {
-        //ROS_INFO_STREAM ("Matching Images; Match found seq:" << sequence );
-        pPtr->first->header.stamp.sec = tPtr->sec;
-        pPtr->first->header.stamp.nsec = tPtr->nsec;
-        pPtr->second->header.stamp.sec = tPtr->sec;
-        pPtr->second->header.stamp.nsec = tPtr->nsec;
-        imageMap.erase (imgPairIterator);
-        timeStampMap.erase (timeStampIterator);
-        publishImages (pPtr->first, pPtr->second);
-        if (imageMap.size() > 1)
+        if ( (*it)->frame_seq_id == sequence)
         {
-            ROS_WARN_STREAM ("imageMap growing: " << imageMap.size());
+            ptr = *it;
+            mTimeStampBuffer.erase (it);
+            break;
         }
-        if (timeStampMap.size() > 1)
-        {
-            ROS_WARN_STREAM ("timeStampMap growing: " << timeStampMap.size());
-        }
-
+        it++;
     }
+    mTimeStampBufferMutex.unlock();
+    return ptr;
 }
 
-void UEyeCamNodelet::cleanBufferMaps (uint32_t sequence)
+UEyeCamNodelet::CompletteImagePtr_t UEyeCamNodelet::findImage (uint32_t sequence)
 {
-    for (auto it = imageMap.cbegin(); it != imageMap.cend() /* not hoisted */; /* no increment */)
+    CompletteImagePtr_t ptr = NULL;
+    mImageBufferMutex.lock();
+    for (auto it = mImageBuffer.cbegin(); it != mImageBuffer.cend() /* not hoisted */; /* no increment */)
     {
-        if (it->first <= sequence)
+        if ((*it)->first->header.seq == sequence)
         {
-            imageMap.erase (it++);   // or "it = m.erase(it)" since C++11
+            ptr = *it;
+            mImageBuffer.erase (it);
+            break;
         }
-        else
-        {
-            ++it;
-        }
+        it++;
     }
-    for (auto it = timeStampMap.cbegin(); it != timeStampMap.cend() /* not hoisted */; /* no increment */)
+    mImageBufferMutex.unlock();
+    return ptr;
+}
+
+void UEyeCamNodelet::cleanBuffers (uint32_t sizeLimit)
+{
+    mImageBufferMutex.lock();
+    if (mImageBuffer.size() > sizeLimit)
     {
-        if (it->first <= sequence)
-        {
-            timeStampMap.erase (it++);   // or "it = m.erase(it)" since C++11
-        }
-        else
-        {
-            ++it;
-        }
+        auto it = mImageBuffer.begin();
+        mImageBuffer.erase (it);
+        ROS_ERROR_STREAM ("CAM:" << cam_name_ << "; Dropping Stale images; SEQ:" << (*it)->first->header.seq);
     }
+    mImageBufferMutex.unlock();
+
+    mTimeStampBufferMutex.lock();
+    if (mTimeStampBuffer.size() > sizeLimit)
+    {
+        auto it = mTimeStampBuffer.begin();
+        mTimeStampBuffer.erase (it);
+        ROS_ERROR_STREAM ("CAM:" << cam_name_ << "; Dropping Stale images; SEQ:" << (*it)->frame_seq_id);
+    }
+    mTimeStampBufferMutex.unlock();
+
 }
 
 void UEyeCamNodelet::startFrameGrabber()
@@ -1861,35 +1872,39 @@ void UEyeCamNodelet::handleTimeout()
 
 void UEyeCamNodelet::bufferTimestamp (const mavros_msgs::CamIMUStampPtr &timeStampPtr)
 {
-    RosTimePtr_t tsPtr = boost::make_shared<ros::Time> (timeStampPtr->frame_stamp.sec, timeStampPtr->frame_stamp.nsec);
-    //ROS_INFO_STREAM ("bufferTimestamp; new  ; seq: " << timeStampPtr->frame_seq_id);
     //TODO: with long enough time this may be a problem if int seq will rollover and become negative.
     uint32_t seq = static_cast<uint32_t> (timeStampPtr->frame_seq_id);
-    timeStampMap[seq] = tsPtr;
+    CompletteImagePtr_t imagePtr = findImage (seq);
+
+    if (imagePtr == NULL)
+    {
+        mTimeStampBufferMutex.lock();
+        mTimeStampBuffer.push_back (timeStampPtr);
+        mTimeStampBufferMutex.unlock();
+    }
+    else
+    {
+        publishImages (imagePtr->first, imagePtr->second, timeStampPtr);
+    }
+
+    //detect missing timestamp
     if (seq != mNextTsSeq_)
     {
-        //remove the image with missing ts if exists
-        auto it  = imageMap.find (mNextTsSeq_);
-        if (it != imageMap.end())
-        {
-            imageMap.erase (it);
-            ROS_WARN_STREAM ("MISSED timestamps!");
-        }
-        else
-        {
-            ROS_WARN_STREAM ("MISSED timestamps - no matching image yet!");
-        }
-
-
+        ROS_WARN_STREAM ("MISSED timestamps!");
     }
-    matchImages (seq);
-
     mNextTsSeq_ = seq + 1;
+    cleanBuffers (2);
 }
 
 
-void UEyeCamNodelet::publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr)
+void UEyeCamNodelet::publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr, mavros_msgs::CamIMUStampPtr timeStampPtr)
 {
+    if (timeStampPtr != NULL)
+    {
+        imgPtr->header.stamp.sec = infoPtr->header.stamp.sec = timeStampPtr->frame_stamp.sec;
+        imgPtr->header.stamp.nsec = infoPtr->header.stamp.nsec = timeStampPtr->frame_stamp.nsec;
+    }
+
     if (ros_cam_pub_.getNumSubscribers() > 0)
     {
         ros_cam_pub_.publish (imgPtr, infoPtr);
