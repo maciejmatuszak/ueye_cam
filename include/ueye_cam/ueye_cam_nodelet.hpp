@@ -282,7 +282,7 @@ protected:
     bool use_time_synch_;
     double lastImageTimeStampSec_;
 
-    uint32_t lastTimeStampSeq_;
+    uint32_t mNextTsSeq_;
     ros::ServiceServer cameraControlServer_;
 
     PID ocv_auto_exposure_pid_;
@@ -290,6 +290,7 @@ protected:
     bool cameraControl (ueye_cam::CameraControlRequest &reqPtr, ueye_cam::CameraControlResponse &respPtr);
 private:
     void matchImages (uint32_t sequence);
+    void cleanBufferMaps (uint32_t sequence);
 };
 
 

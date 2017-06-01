@@ -163,10 +163,11 @@ bool UeyeCamSynchNodelet::sendCameraTriggerControl (bool enable)
 void UeyeCamSynchNodelet::SynchThread()
 {
 
-
+    ros::Rate delay (ros::Duration (2.0));
     bool result = true;
     sendCameraTriggerControl (false);
 
+    delay.sleep();
     result = waitForAllCameras();
     if (result == false)
     {

@@ -52,6 +52,7 @@
 #include <sensor_msgs/fill_image.h>
 #include <sensor_msgs/image_encodings.h>
 #include <cv_bridge/cv_bridge.h>
+#include <boost/range/adaptor/map.hpp>
 
 
 
@@ -99,7 +100,7 @@ UEyeCamNodelet::UEyeCamNodelet():
     init_publish_time_ (0),
     prev_output_frame_idx_ (0),
     lastImageTimeStampSec_ (0),
-    lastTimeStampSeq_ (0),
+    mNextTsSeq_ (0),
     ocv_auto_exposure_pid_()
 {
     cam_params_.image_width = DEFAULT_IMAGE_WIDTH;
@@ -280,7 +281,7 @@ bool UEyeCamNodelet::cameraControl (ueye_cam::CameraControlRequest &req, ueye_ca
     case CameraControlRequest::ACTION_START:
         if (use_time_synch_ )
         {
-            lastTimeStampSeq_ = 0;
+            mNextTsSeq_ = 0;
             imageSeq_ = 0;
             imageMap.clear();
             timeStampMap.clear();
@@ -1536,6 +1537,7 @@ void UEyeCamNodelet::frameGrabLoop()
                     output_rate_mutex_.unlock();
                     if (throttle_curr_frame)
                     {
+                        ROS_WARN_STREAM ("Throttle this frame!");
                         continue;
                     }
 
@@ -1545,12 +1547,13 @@ void UEyeCamNodelet::frameGrabLoop()
                     // Copy pixel content from internal frame buffer to ROS image
                     if (!fillMsgData (*img_msg_ptr))
                     {
+                        ROS_WARN_STREAM ("Fill Image Data failed!");
                         continue;
                     }
 
                     img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = imageSeq_++;
                     img_msg_ptr->header.frame_id = cam_info_msg_ptr->header.frame_id;
-                    ROS_DEBUG_STREAM ("Image ready");
+                    ROS_INFO_STREAM ("Image ready; SEQ:" << cam_info_msg_ptr->header.seq);
 
                     if (!frame_grab_alive_ || !ros::ok())
                     {
@@ -1666,8 +1669,42 @@ void UEyeCamNodelet::matchImages (uint32_t sequence)
         imageMap.erase (imgPairIterator);
         timeStampMap.erase (timeStampIterator);
         publishImages (pPtr->first, pPtr->second);
-    }
+        if (imageMap.size() > 1)
+        {
+            ROS_WARN_STREAM ("imageMap growing: " << imageMap.size());
+        }
+        if (timeStampMap.size() > 1)
+        {
+            ROS_WARN_STREAM ("timeStampMap growing: " << timeStampMap.size());
+        }
 
+    }
+}
+
+void UEyeCamNodelet::cleanBufferMaps (uint32_t sequence)
+{
+    for (auto it = imageMap.cbegin(); it != imageMap.cend() /* not hoisted */; /* no increment */)
+    {
+        if (it->first <= sequence)
+        {
+            imageMap.erase (it++);   // or "it = m.erase(it)" since C++11
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    for (auto it = timeStampMap.cbegin(); it != timeStampMap.cend() /* not hoisted */; /* no increment */)
+    {
+        if (it->first <= sequence)
+        {
+            timeStampMap.erase (it++);   // or "it = m.erase(it)" since C++11
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 void UEyeCamNodelet::startFrameGrabber()
@@ -1829,13 +1866,25 @@ void UEyeCamNodelet::bufferTimestamp (const mavros_msgs::CamIMUStampPtr &timeSta
     //TODO: with long enough time this may be a problem if int seq will rollover and become negative.
     uint32_t seq = static_cast<uint32_t> (timeStampPtr->frame_seq_id);
     timeStampMap[seq] = tsPtr;
-    matchImages (seq);
-    uint32_t missed = seq - lastTimeStampSeq_ - 1;
-    if (missed > 0)
+    if (seq != mNextTsSeq_)
     {
-        ROS_WARN_STREAM ("MISSED " << missed << " timestamps!");
+        //remove the image with missing ts if exists
+        auto it  = imageMap.find (mNextTsSeq_);
+        if (it != imageMap.end())
+        {
+            imageMap.erase (it);
+            ROS_WARN_STREAM ("MISSED timestamps!");
+        }
+        else
+        {
+            ROS_WARN_STREAM ("MISSED timestamps - no matching image yet!");
+        }
+
+
     }
-    lastTimeStampSeq_ = seq;
+    matchImages (seq);
+
+    mNextTsSeq_ = seq + 1;
 }
 
 
