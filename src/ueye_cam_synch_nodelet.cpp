@@ -47,6 +47,7 @@ void UeyeCamSynchNodelet::onInit()
         mCameraControlClients[camName] = sc;
     }
 
+    //TODO:Evaluate the use of multithreaded callback
     mCameraTriggerControlClient = getMTNodeHandle().serviceClient<mavros_msgs::CommandTriggerControl> (triggerControlSrvName);
 
     mMasterExposureSubscriber = nh.subscribe (mMasterExposureTopic, 1, &UeyeCamSynchNodelet::masterExposureHandler, this);
