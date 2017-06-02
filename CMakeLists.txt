@@ -57,6 +57,7 @@ if(NOT UEYE_LIBRARY)
 endif()
 
 set(UEYECAM_NODELET_NAME ueye_cam_nodelet)
+
 set(UEYECAM_LIB_NAME ueye_wrapper)
 
 set(UEYECAM_LIB_SOURCES
@@ -70,11 +71,13 @@ set(UEYECAM_LIB_HEADERS
 
 set(UEYECAM_NODELET_SOURCES
   src/ueye_cam_nodelet.cpp
+  src/ueye_cam_synch_nodelet.cpp
   src/pid.cpp
 )
 
 set(UEYECAM_NODELET_HEADERS
   include/ueye_cam/ueye_cam_nodelet.hpp
+  include/ueye_cam/ueye_cam_synch_nodelet.hpp
   include/ueye_cam/pid.hpp
 )
 
@@ -85,7 +88,7 @@ add_message_files(DIRECTORY msg
 
 add_service_files(
     DIRECTORY srv
-    FILES CameraReady.srv)
+    FILES CameraControl.srv)
 
 generate_messages(DEPENDENCIES std_msgs)
 
@@ -144,3 +147,12 @@ install(FILES nodelet_plugins.xml
 install(DIRECTORY launch/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/launch
   )
+
+###############################################################################
+
+#Add all files in subdirectories of the project in
+# a dummy_target so qtcreator have access to all files
+FILE(GLOB_RECURSE extra_files ${CMAKE_SOURCE_DIR}/*)
+add_custom_target(dummy_${PROJECT_NAME} SOURCES ${extra_files})
+
+##############################################################################

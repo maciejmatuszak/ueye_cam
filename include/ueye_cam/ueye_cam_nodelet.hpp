@@ -61,7 +61,7 @@
 #include <ueye_cam/ueye_cam_driver.hpp>
 #include <image_geometry/pinhole_camera_model.h>
 #include "ueye_cam/Exposure.h"
-#include "ueye_cam/CameraReady.h"
+#include "ueye_cam/CameraControl.h"
 #include "pid.hpp"
 #include "mavros_msgs/CamIMUStamp.h"
 #include "mavros_msgs/CommandTriggerControl.h"
@@ -69,23 +69,8 @@
 
 
 
-namespace ueye_cam {
-
-/**
- * Time synchronisation method:
- * None - no external timestamp is used
- * TimestampAlwaysFirst - It is assumed that Timestamp arrives first and matching image after but before another timestamp
- * MatchSequences - It is assumed that Timestamp and image messages arrive without interruption and they both start with sequence of 0.
- *      Synchronisation trigger is used to make sure both sequences start from 0.
- * see http://dev.px4.io/advanced-camera-trigger.html for more details
- */
- typedef enum e_TimeSynchMethod
+namespace ueye_cam
 {
-    TimeSynchMethod_None = 0,
-    TimeSynchMethod_TimestampAlwaysFirst = 1,
-    TimeSynchMethod_MatchSequences = 2
-} TimeSynchMethod;
-
 
 typedef dynamic_reconfigure::Server<ueye_cam::UEyeCamConfig> ReconfigureServer;
 
@@ -93,216 +78,214 @@ typedef dynamic_reconfigure::Server<ueye_cam::UEyeCamConfig> ReconfigureServer;
 /**
  * ROS interface nodelet for UEye camera API from IDS Imaging Development Systems GMBH.
  */
-class UEyeCamNodelet : public nodelet::Nodelet, public UEyeCamDriver {
+class UEyeCamNodelet : public nodelet::Nodelet, public UEyeCamDriver
+{
 public:
-  constexpr static unsigned int RECONFIGURE_RUNNING = 0;
-  constexpr static unsigned int RECONFIGURE_STOP = 1;
-  constexpr static unsigned int RECONFIGURE_CLOSE = 3;
-  constexpr static int DEFAULT_IMAGE_WIDTH = 640;  // NOTE: these default values do not matter, as they
-  constexpr static int DEFAULT_IMAGE_HEIGHT = 480; // are overwritten by queryCamParams() during connectCam()
-  constexpr static double DEFAULT_EXPOSURE = 10.0;
-  constexpr static double DEFAULT_FRAME_RATE = 10.0;
-  constexpr static int DEFAULT_PIXEL_CLOCK = 25;
-  constexpr static int DEFAULT_FLASH_DURATION = 1000;
+    constexpr static unsigned int RECONFIGURE_RUNNING = 0;
+    constexpr static unsigned int RECONFIGURE_STOP = 1;
+    constexpr static unsigned int RECONFIGURE_CLOSE = 3;
+    constexpr static int DEFAULT_IMAGE_WIDTH = 640;  // NOTE: these default values do not matter, as they
+    constexpr static int DEFAULT_IMAGE_HEIGHT = 480; // are overwritten by queryCamParams() during connectCam()
+    constexpr static double DEFAULT_EXPOSURE = 10.0;
+    constexpr static double DEFAULT_FRAME_RATE = 10.0;
+    constexpr static int DEFAULT_PIXEL_CLOCK = 25;
+    constexpr static int DEFAULT_FLASH_DURATION = 1000;
 
-  const static std::string  DEFAULT_FRAME_NAME;
-  const static std::string  DEFAULT_CAMERA_NAME;
-  const static std::string  DEFAULT_CAMERA_IMU_TOPIC;
-  const static std::string  DEFAULT_CAMERA_TOPIC;
-  const static std::string  DEFAULT_CAMERA_TOPIC_RECT;
-  const static std::string  DEFAULT_CAMERA_MASTER_EXPOSURE_TOPIC;
-  const static std::string  DEFAULT_TIMEOUT_TOPIC;
-  const static std::string  DEFAULT_COLOR_MODE;
-  const static bool         DEFAULT_CAMERA_IS_MASTER;
-  const static bool         DEFAULT_USE_TIME_SYNCH;
-  const static std::string  DEFAULT_TRIGGER_CONTROL_SRV_NAME;
-  const static bool         DEFAULT_TRIGGER_CONTROL_SRV_IGNORE_RESP;
+    const static std::string  DEFAULT_FRAME_NAME;
+    const static std::string  DEFAULT_CAMERA_NAME;
+    const static std::string  DEFAULT_CAMERA_IMU_TOPIC;
+    const static std::string  DEFAULT_CAMERA_TOPIC;
+    const static std::string  DEFAULT_CAMERA_TOPIC_RECT;
+    const static std::string  DEFAULT_CAMERA_MASTER_EXPOSURE_TOPIC;
+    const static std::string  DEFAULT_TIMEOUT_TOPIC;
+    const static std::string  DEFAULT_COLOR_MODE;
+    const static bool         DEFAULT_CAMERA_IS_MASTER;
+    const static bool         DEFAULT_USE_TIME_SYNCH;
+    const static std::string  DEFAULT_TRIGGER_CONTROL_SRV_NAME;
+    const static bool         DEFAULT_TRIGGER_CONTROL_SRV_IGNORE_RESP;
 
 
-  UEyeCamNodelet();
 
-  virtual ~UEyeCamNodelet();
+    UEyeCamNodelet();
 
-  /**
-   * Initializes ROS environment, loads static ROS parameters, initializes UEye camera,
-   * and starts live capturing / frame grabbing thread.
-   */
-  virtual void onInit();
+    virtual ~UEyeCamNodelet();
 
-  /**
-   * Handles callbacks from dynamic_reconfigure.
-   */
-  void configCallback(ueye_cam::UEyeCamConfig& config, uint32_t level);
+    /**
+     * Initializes ROS environment, loads static ROS parameters, initializes UEye camera,
+     * and starts live capturing / frame grabbing thread.
+     */
+    virtual void onInit();
+
+    /**
+     * Handles callbacks from dynamic_reconfigure.
+     */
+    void configCallback (ueye_cam::UEyeCamConfig &config, uint32_t level);
 
 
 protected:
-  /**
-   * Calls UEyeCamDriver::syncCamConfig(), then updates ROS camera info
-   * and ROS image settings.
-   */
-  virtual INT syncCamConfig(std::string dft_mode_str = "mono8");
+    /**
+     * Calls UEyeCamDriver::syncCamConfig(), then updates ROS camera info
+     * and ROS image settings.
+     */
+    virtual INT syncCamConfig (std::string dft_mode_str = "mono8");
 
-  /**
-   * Reads parameter values from currently selected camera.
-   */
-  INT queryCamParams();
+    /**
+     * Reads parameter values from currently selected camera.
+     */
+    INT queryCamParams();
 
-  /**
-   * Loads, validates, and updates static ROS parameters.
-   */
-  INT parseROSParams(ros::NodeHandle& local_nh);
+    /**
+     * Loads, validates, and updates static ROS parameters.
+     */
+    INT parseROSParams (ros::NodeHandle &local_nh);
 
-  /**
-   * Initializes the camera handle, loads UEye INI configuration, refreshes
-   * parameters from camera, loads and sets static ROS parameters, and starts
-   * the frame grabber thread.
-   */
-  virtual INT connectCam();
+    /**
+     * Initializes the camera handle, loads UEye INI configuration, refreshes
+     * parameters from camera, loads and sets static ROS parameters, and starts
+     * the frame grabber thread.
+     */
+    virtual INT connectCam();
 
-  /**
-   * Stops the frame grabber thread, closes the camera handle,
-   * and releases all local variables.
-   */
-  virtual INT disconnectCam();
+    /**
+     * Stops the frame grabber thread, closes the camera handle,
+     * and releases all local variables.
+     */
+    virtual INT disconnectCam();
 
-  /**
-   * (ROS Service) Updates the camera's intrinsic parameters over the ROS topic,
-   * and saves the parameters to a flatfile.
-   */
-  bool setCamInfo(sensor_msgs::SetCameraInfo::Request& req,
-      sensor_msgs::SetCameraInfo::Response& rsp);
+    /**
+     * (ROS Service) Updates the camera's intrinsic parameters over the ROS topic,
+     * and saves the parameters to a flatfile.
+     */
+    bool setCamInfo (sensor_msgs::SetCameraInfo::Request &req,
+                     sensor_msgs::SetCameraInfo::Response &rsp);
 
-  /**
-   * Loads the camera's intrinsic parameters from camIntrFilename.
-   */
-  void loadIntrinsicsFile();
-
-
-  /**
-   * Saves the camera's intrinsic parameters to camIntrFilename.
-   */
-  bool saveIntrinsicsFile();
-
-  /**
-   * Main ROS interface "spin" loop.
-   */
-  void frameGrabLoop();
-  void startFrameGrabber();
-  void stopFrameGrabber();
-
-  const static std::map<INT, std::string> ENCODING_DICTIONARY;
-  /**
-   * Transfers the current frame content into given sensor_msgs::Image,
-   * therefore writes the fields width, height, encoding, step and
-   * data of img.
-   */
-  bool fillMsgData(sensor_msgs::Image& img) const;
-
-  bool createImageCvPtr();
-  /**
-   * Returns image's timestamp or current wall time if driver call fails.
-   */
-  ros::Time getImageTimestamp();
-
-  bool setTriggerControl(bool enable);
-  /**
-   * @brief setSlaveExposure
-   * @param msg
-   */
-  void setSlaveExposure(const ueye_cam::ExposurePtr &msgPtr);
-
-  /**
-   * @brief sendSlaveExposure
-   */
-  void sendSlaveExposure();
+    /**
+     * Loads the camera's intrinsic parameters from camIntrFilename.
+     */
+    void loadIntrinsicsFile();
 
 
-  /**
-   * @brief processAndPublish
-   * @param containerptr
-   */
-  void bufferTimestamp(const mavros_msgs::CamIMUStampPtr& msg);
-  void publishImages();
+    /**
+     * Saves the camera's intrinsic parameters to camIntrFilename.
+     */
+    bool saveIntrinsicsFile();
 
-  void optimizeCaptureParams();
+    /**
+     * Main ROS interface "spin" loop.
+     */
+    void frameGrabLoop();
+    void startFrameGrabber();
+    void stopFrameGrabber();
 
-  /**
-   * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
-   */
-  ros::Time getImageTickTimestamp();
+    const static std::map<INT, std::string> ENCODING_DICTIONARY;
+    /**
+     * Transfers the current frame content into given sensor_msgs::Image,
+     * therefore writes the fields width, height, encoding, step and
+     * data of img.
+     */
+    bool fillMsgData (sensor_msgs::Image &img) const;
 
-  virtual void handleTimeout();
+    cv_bridge::CvImageConstPtr createImageCvPtr (sensor_msgs::ImagePtr img_cv_ptr);
+    /**
+     * Returns image's timestamp or current wall time if driver call fails.
+     */
+    ros::Time getImageTimestamp();
 
-  std::thread frame_grab_thread_;
-  bool frame_grab_alive_;
+    /**
+     * @brief setSlaveExposure
+     * @param msg
+     */
+    void setSlaveExposure (const ueye_cam::ExposurePtr &msgPtr);
 
-  ReconfigureServer* ros_cfg_;
-  boost::recursive_mutex ros_cfg_mutex_;
-  bool cfg_sync_requested_;
-
-  image_transport::CameraPublisher ros_cam_pub_;
-  image_transport::Publisher ros_rect_pub_;
-
-  /**
-   * @brief ros_exposure_pub_ publishes exposure details for slave cameras
-   */
-  ros::Publisher ros_exposure_pub_;
-
-  /**
-   * @brief ros_exposure_sub_ slave cameras subscribe for exposure details from master
-   */
-  ros::Subscriber ros_exposure_sub_;
-
-  /**
-   * @brief ros_timestamp_sub_ subscriber for time synch messages from mavros (Pixhawk / PX4)
-   */
-  ros::Subscriber ros_timestamp_sub_;
-
-  // Used for synchronisation with IMU
-  ros::Time synch_time_stamp_msg_;
-  //CV copy of the image message shared between rectification and adaptive exposure time algorithms
-  cv_bridge::CvImageConstPtr img_cv_ptr;
-
-  sensor_msgs::ImagePtr img_msg_ptr;
-  sensor_msgs::CameraInfoPtr cam_info_msg_ptr;
-
-  unsigned int ros_frame_count_;
-  ros::Publisher timeout_pub_;
-  unsigned long long int timeout_count_;
-
-  // Image rectification
-  image_geometry::PinholeCameraModel camera_model_;
+    /**
+     * @brief sendSlaveExposure
+     */
+    void sendSlaveExposure (float exposure);
 
 
-  ros::ServiceServer set_cam_info_srv_;
+    /**
+     * @brief processAndPublish
+     * @param containerptr
+     */
+    void bufferTimestamp (const mavros_msgs::CamIMUStampPtr &msg);
+    void publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr);
 
-  std::string frame_name_;
-  std::string cam_topic_;
-  std::string cam_topic_rect_;
-  std::string cam_master_exposure_topic_;
-  std::string timeout_topic_;
-  std::string cam_intr_filename_;
-  std::string cam_params_filename_; // should be valid UEye INI file
-  ueye_cam::UEyeCamConfig cam_params_;
+    void optimizeCaptureParams (sensor_msgs::ImagePtr imgPtr);
 
-  ros::Time init_ros_time_; // for processing frames
-  uint64_t init_clock_tick_;
+    /**
+     * Returns image's timestamp based on device's internal clock or current wall time if driver call fails.
+     */
+    ros::Time getImageTickTimestamp();
 
-  ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
-  uint64_t prev_output_frame_idx_; // see init_publish_time_
-  boost::mutex output_rate_mutex_;
-  std::string camera_imu_topic_;
-  bool camera_is_master_;
-  bool use_time_synch_;
-  ros::Time lastImageTimeStamp_;
+    virtual void handleTimeout();
+    int32_t setExposure (bool &auto_exposure, double &exposure_ms);
 
-  std::string triggerControlSrvName_;
-  bool ignoreTriggerResponse_;
-  ros::ServiceClient triggerControlClient_;
-  mavros_msgs::CommandTriggerControl triggerControlClientCall_;
+    std::thread frame_grab_thread_;
+    bool frame_grab_alive_;
 
-  PID ocv_auto_exposure_pid_;
+    ReconfigureServer* ros_cfg_;
+    boost::recursive_mutex ros_cfg_mutex_;
+    bool cfg_sync_requested_;
 
+    image_transport::CameraPublisher ros_cam_pub_;
+    image_transport::Publisher ros_rect_pub_;
+
+    /**
+     * @brief ros_exposure_pub_ publishes exposure details for slave cameras
+     */
+    ros::Publisher ros_exposure_pub_;
+
+    /**
+     * @brief ros_exposure_sub_ slave cameras subscribe for exposure details from master
+     */
+    ros::Subscriber ros_exposure_sub_;
+
+    /**
+     * @brief ros_timestamp_sub_ subscriber for time synch messages from mavros (Pixhawk / PX4)
+     */
+    ros::Subscriber ros_timestamp_sub_;
+
+    //CV copy of the image message shared between rectification and adaptive exposure time algorithms
+    sensor_msgs::CameraInfoPtr cam_info_msg_ptr_;
+
+    mavros_msgs::CamIMUStampPtr mTimeStampBuffer;
+
+    unsigned int imageSeq_;
+    ros::Publisher timeout_pub_;
+    unsigned long long int timeout_count_;
+
+    // Image rectification
+    image_geometry::PinholeCameraModel camera_model_;
+
+
+    ros::ServiceServer set_cam_info_srv_;
+
+    std::string frame_name_;
+    std::string cam_topic_;
+    std::string cam_topic_rect_;
+    std::string cam_master_exposure_topic_;
+    std::string timeout_topic_;
+    std::string cam_intr_filename_;
+    std::string cam_params_filename_; // should be valid UEye INI file
+    ueye_cam::UEyeCamConfig cam_params_;
+
+    ros::Time init_ros_time_; // for processing frames
+    uint64_t init_clock_tick_;
+
+    ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
+    uint64_t prev_output_frame_idx_; // see init_publish_time_
+    boost::mutex output_rate_mutex_;
+    std::string camera_imu_topic_;
+    bool camera_is_master_;
+    bool use_time_synch_;
+    double lastImageTimeStampSec_;
+
+
+    PID ocv_auto_exposure_pid_;
+private:
+    bool                               mIgnoreCameraTriggerResponse;
+    ros::ServiceClient                 mCameraTriggerControlClient;
+    bool sendCameraTriggerControl (bool enable);
 };
 
 
