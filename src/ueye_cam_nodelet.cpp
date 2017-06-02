@@ -305,6 +305,22 @@ bool UEyeCamNodelet::cameraControl (ueye_cam::CameraControlRequest &req, ueye_ca
         resp.success = true;
         ROS_INFO_STREAM ("CAMERA CONTROL: START");
         break;
+    case CameraControlRequest::ACTION_SET_RESET_SEQ:
+        if (use_time_synch_ )
+        {
+            mNextTsSeq_ = 0;
+            imageSeq_ = 0;
+            mImageBufferMutex.lock();
+            mImageBuffer.clear();
+            mImageBufferMutex.unlock();
+
+            mTimeStampBufferMutex.lock();
+            mTimeStampBuffer.clear();
+            mTimeStampBufferMutex.unlock();
+        }
+
+        ROS_INFO_STREAM ("CAMERA CONTROL: RESET SEQ");
+        break;
     case CameraControlRequest::ACTION_SET_EXPOSURE:
         cam_params_.auto_exposure = false;
         cam_params_.exposure = req.arg1;
@@ -1400,6 +1416,7 @@ void UEyeCamNodelet::frameGrabLoop()
             // and stop live video mode if ROS image topic no longer has any subscribers
             //ROS_DEBUG("Number of subscribers; image: %d; rect image: %d;", ros_cam_pub_.getNumSubscribers(), ros_rect_pub_.getNumSubscribers());
 
+            ROS_INFO_STREAM ("Loop Start");
             if (use_time_synch_ == false)
             {
                 currNumSubscribers = ros_cam_pub_.getNumSubscribers() + ros_rect_pub_.getNumSubscribers();
@@ -1454,6 +1471,7 @@ void UEyeCamNodelet::frameGrabLoop()
                 prevNumSubscribers = currNumSubscribers;
             }
 
+            ROS_INFO_STREAM ("check config..");
             // Send updated dyncfg parameters if previously changed
             if (cfg_sync_requested_)
             {
@@ -1464,6 +1482,7 @@ void UEyeCamNodelet::frameGrabLoop()
                     cfg_sync_requested_ = false;
                 }
             }
+            ROS_INFO_STREAM ("check config..DONE");
 
 
 #ifdef DEBUG_PRINTOUT_FRAME_GRAB_RATES
@@ -1476,13 +1495,15 @@ void UEyeCamNodelet::frameGrabLoop()
             }
             prevStartGrab = currStartGrab;
 #endif
-
+            ROS_INFO_STREAM ("IsCapturing");
             if (isCapturing())
             {
                 INT eventTimeout = (cam_params_.auto_frame_rate || cam_params_.ext_trigger_mode) ?
                                    (INT) 2000 : (INT) (1000.0 / cam_params_.frame_rate * 2);
+                ROS_INFO_STREAM ("Waiting for frame");
                 if (processNextFrame (eventTimeout) != NULL)
                 {
+                    ROS_INFO_STREAM ("Got frame");
                     // Initialize shared pointers from member messages for nodelet intraprocess publishing
 
 
@@ -1559,7 +1580,6 @@ void UEyeCamNodelet::frameGrabLoop()
 
                     img_msg_ptr->header.seq = cam_info_msg_ptr->header.seq = imageSeq_++;
                     img_msg_ptr->header.frame_id = cam_info_msg_ptr->header.frame_id;
-                    ROS_INFO_STREAM ("Image ready; SEQ:" << cam_info_msg_ptr->header.seq);
 
                     if (!frame_grab_alive_ || !ros::ok())
                     {
@@ -1579,6 +1599,7 @@ void UEyeCamNodelet::frameGrabLoop()
                         auto timeStampMsgPtr = findTimeStamp (img_msg_ptr->header.seq);
                         if (timeStampMsgPtr == NULL)
                         {
+                            ROS_INFO_STREAM ("Image buffered SEQ:" << img_msg_ptr->header.seq);
                             // buffer for later
                             mImageBufferMutex.lock();
                             mImageBuffer.push_back (boost::make_shared<CompletteImage_t> (img_msg_ptr, cam_info_msg_ptr));
@@ -1599,7 +1620,7 @@ void UEyeCamNodelet::frameGrabLoop()
                             ROS_WARN_STREAM ("Missed image! Time since last frame:" << timeDif << "; expected + 5% :" << expectedTime);
                         }
                         lastImageTimeStampSec_ = img_msg_ptr->header.stamp.toSec();
-                        cleanBuffers (1);
+                        cleanBuffers ();
                     }
                     else
                     {
@@ -1696,14 +1717,15 @@ UEyeCamNodelet::CompletteImagePtr_t UEyeCamNodelet::findImage (uint32_t sequence
     return ptr;
 }
 
-void UEyeCamNodelet::cleanBuffers (uint32_t sizeLimit)
+void UEyeCamNodelet::cleanBuffers ()
 {
+    static uint32_t sizeLimit = 5;
     mImageBufferMutex.lock();
     if (mImageBuffer.size() > sizeLimit)
     {
         auto it = mImageBuffer.begin();
         mImageBuffer.erase (it);
-        ROS_ERROR_STREAM ("CAM:" << cam_name_ << "; Dropping Stale images; SEQ:" << (*it)->first->header.seq);
+        ROS_ERROR_STREAM ("CAM:" << cam_name_ << "; Dropping Stale Imagee; SEQ:" << (*it)->first->header.seq);
     }
     mImageBufferMutex.unlock();
 
@@ -1712,7 +1734,7 @@ void UEyeCamNodelet::cleanBuffers (uint32_t sizeLimit)
     {
         auto it = mTimeStampBuffer.begin();
         mTimeStampBuffer.erase (it);
-        ROS_ERROR_STREAM ("CAM:" << cam_name_ << "; Dropping Stale images; SEQ:" << (*it)->frame_seq_id);
+        ROS_ERROR_STREAM ("CAM:" << cam_name_ << "; Dropping Stale TimeStamp; SEQ:" << (*it)->frame_seq_id);
     }
     mTimeStampBufferMutex.unlock();
 
@@ -1878,6 +1900,7 @@ void UEyeCamNodelet::bufferTimestamp (const mavros_msgs::CamIMUStampPtr &timeSta
 
     if (imagePtr == NULL)
     {
+        ROS_INFO_STREAM ("Timestamp buffered SEQ:" << seq);
         mTimeStampBufferMutex.lock();
         mTimeStampBuffer.push_back (timeStampPtr);
         mTimeStampBufferMutex.unlock();
@@ -1893,7 +1916,7 @@ void UEyeCamNodelet::bufferTimestamp (const mavros_msgs::CamIMUStampPtr &timeSta
         ROS_WARN_STREAM ("MISSED timestamps!");
     }
     mNextTsSeq_ = seq + 1;
-    cleanBuffers (2);
+    cleanBuffers ();
 }
 
 
@@ -1904,6 +1927,8 @@ void UEyeCamNodelet::publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::C
         imgPtr->header.stamp.sec = infoPtr->header.stamp.sec = timeStampPtr->frame_stamp.sec;
         imgPtr->header.stamp.nsec = infoPtr->header.stamp.nsec = timeStampPtr->frame_stamp.nsec;
     }
+
+    ROS_INFO_STREAM ("Publishing image seq:" << infoPtr->header.seq);
 
     if (ros_cam_pub_.getNumSubscribers() > 0)
     {

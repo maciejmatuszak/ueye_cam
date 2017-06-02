@@ -164,11 +164,13 @@ bool UeyeCamSynchNodelet::sendCameraTriggerControl (bool enable)
 void UeyeCamSynchNodelet::SynchThread()
 {
 
-    ros::Rate delay (ros::Duration (2.0));
+    //waiting for cameras
+
     bool result = true;
     sendCameraTriggerControl (false);
 
-    delay.sleep();
+    ros::Rate delayReady (ros::Duration (3));
+    delayReady.sleep();
     result = waitForAllCameras();
     if (result == false)
     {
@@ -184,6 +186,10 @@ void UeyeCamSynchNodelet::SynchThread()
         exit (-2);
     }
     ROS_INFO_STREAM ("All cameras reseted");
+    //give the cameras time to start
+    ros::Rate delay (ros::Duration (1));
+    delay.sleep();
+
     sendCameraTriggerControl (true);
 
 

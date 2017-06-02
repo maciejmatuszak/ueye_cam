@@ -295,7 +295,7 @@ private:
     mavros_msgs::CamIMUStampPtr  findTimeStamp (int32_t sequence);
     UEyeCamNodelet::CompletteImagePtr_t findImage (uint32_t sequence);
 
-    void cleanBuffers (uint32_t sizeLimit);
+    void cleanBuffers ();
 };
 
 
