@@ -77,6 +77,8 @@ const std::string UEyeCamNodelet::DEFAULT_TIMEOUT_TOPIC = "timeout_count";
 const std::string UEyeCamNodelet::DEFAULT_COLOR_MODE = "";
 const bool        UEyeCamNodelet::DEFAULT_CAMERA_IS_MASTER = false;
 const bool        UEyeCamNodelet::DEFAULT_USE_TIME_SYNCH = false;
+const std::string UEyeCamNodelet::DEFAULT_TRIGGER_CONTROL_SRV_NAME = "/px4/cmd/trigger_control";
+const bool        UEyeCamNodelet::DEFAULT_TRIGGER_CONTROL_SRV_IGNORE_RESP = false;
 
 
 constexpr int     UEyeCamDriver::ANY_CAMERA; // Needed since CMakeLists.txt creates 2 separate libraries: one for non-ROS parent class, and one for ROS child class
@@ -100,7 +102,6 @@ UEyeCamNodelet::UEyeCamNodelet():
     init_publish_time_ (0),
     prev_output_frame_idx_ (0),
     lastImageTimeStampSec_ (0),
-    mNextTsSeq_ (0),
     ocv_auto_exposure_pid_()
 {
     cam_params_.image_width = DEFAULT_IMAGE_WIDTH;
@@ -176,6 +177,19 @@ void UEyeCamNodelet::onInit()
     local_nh.param<string> ("camera_intrinsics_file", cam_intr_filename_, "");
     local_nh.param<int> ("camera_id", cam_id_, ANY_CAMERA);
     local_nh.param<string> ("camera_parameters_file", cam_params_filename_, "");
+
+    string triggerControlSrvName;
+    local_nh.param<string> ("trigger_control_srv", triggerControlSrvName, DEFAULT_TRIGGER_CONTROL_SRV_NAME );
+    local_nh.param<bool> ("trigger_control_ignore_response", mIgnoreCameraTriggerResponse, DEFAULT_TRIGGER_CONTROL_SRV_IGNORE_RESP );
+
+    //TODO:Evaluate the use of multithreaded callback
+    mCameraTriggerControlClient = getMTNodeHandle().serviceClient<mavros_msgs::CommandTriggerControl> (triggerControlSrvName);
+
+    if (use_time_synch_)
+    {
+        sendCameraTriggerControl (false);
+    }
+
     if (cam_id_ < 0)
     {
         WARN_STREAM ("Invalid camera ID specified: " << cam_id_ <<
@@ -207,7 +221,6 @@ void UEyeCamNodelet::onInit()
     if (use_time_synch_)
     {
         ROS_INFO_STREAM ("Advertising Service camera_control");
-        cameraControlServer_ = getMTPrivateNodeHandle().advertiseService ("camera_control", &UEyeCamNodelet::cameraControl, this);
         ros_timestamp_sub_ = nh.subscribe (camera_imu_topic_, 3, &UEyeCamNodelet::bufferTimestamp, this);
     }
 
@@ -227,10 +240,7 @@ void UEyeCamNodelet::onInit()
 
     ros_cfg_->setCallback (f); // this will call configCallback, which will configure the camera's parameters
 
-    if (use_time_synch_ == false)
-    {
-        startFrameGrabber();
-    }
+    startFrameGrabber();
 
     INFO_STREAM (
         "UEye camera [" << cam_name_ << "] initialized on topic " << ros_cam_pub_.getTopic() << endl <<
@@ -266,86 +276,10 @@ void UEyeCamNodelet::onInit()
         "Mirror Image Upside Down:\t" << cam_params_.flip_upd << endl <<
         "Mirror Image Left Right:\t" << cam_params_.flip_lr << endl
     );
+    ros::Rate rate (1);
+    rate.sleep();
+    sendCameraTriggerControl (true);
 }
-
-bool UEyeCamNodelet::cameraControl (ueye_cam::CameraControlRequest &req, ueye_cam::CameraControlResponse &resp)
-{
-    resp.camera = cam_name_;
-    switch (req.action)
-    {
-    case CameraControlRequest::ACTION_STOP:
-        stopFrameGrabber();
-        resp.success = true;
-        ROS_INFO_STREAM ("CAMERA CONTROL: STOP");
-        break;
-    case CameraControlRequest::ACTION_START:
-        if (use_time_synch_ )
-        {
-            mNextTsSeq_ = 0;
-            imageSeq_ = 0;
-            mImageBufferMutex.lock();
-            mImageBuffer.clear();
-            mImageBufferMutex.unlock();
-
-            mTimeStampBufferMutex.lock();
-            mTimeStampBuffer.clear();
-            mTimeStampBufferMutex.unlock();
-
-            if (cam_params_.ext_trigger_mode)
-            {
-                if (setExtTriggerMode() != IS_SUCCESS)
-                {
-                    ERROR_STREAM ("Setting trigger mode failed for [" << cam_name_ << "]");
-                }
-            }
-            INFO_STREAM ("[" << cam_name_ << "] set to external trigger mode");
-        }
-
-        startFrameGrabber();
-        resp.success = true;
-        ROS_INFO_STREAM ("CAMERA CONTROL: START");
-        break;
-    case CameraControlRequest::ACTION_SET_RESET_SEQ:
-        if (use_time_synch_ )
-        {
-            mNextTsSeq_ = 0;
-            imageSeq_ = 0;
-            mImageBufferMutex.lock();
-            mImageBuffer.clear();
-            mImageBufferMutex.unlock();
-
-            mTimeStampBufferMutex.lock();
-            mTimeStampBuffer.clear();
-            mTimeStampBufferMutex.unlock();
-        }
-
-        ROS_INFO_STREAM ("CAMERA CONTROL: RESET SEQ");
-        break;
-    case CameraControlRequest::ACTION_SET_EXPOSURE:
-        cam_params_.auto_exposure = false;
-        cam_params_.exposure = req.arg1;
-        resp.success = setExposure (cam_params_.auto_exposure, cam_params_.exposure);
-        if (resp.success == false)
-        {
-            resp.message = "Failed to set camera exposure";
-        }
-        ROS_INFO_STREAM ("CAMERA CONTROL: SET EXPOSURE");
-        break;
-    case CameraControlRequest::ACTION_SET_EXTERNAL_TRIGGER:
-        cam_params_.ext_trigger_mode = req.arg1 == 0 ? false : true;
-        stopFrameGrabber();
-        startFrameGrabber();
-        resp.success = true;
-        ROS_INFO_STREAM ("CAMERA CONTROL: SET_EXTERNAL_TRIGGER");
-        break;
-    default:
-        resp.success = false;
-        resp.message = "CameraControlRequest action: " + to_string (req.action) + "not supported";
-        break;
-    }
-    return resp.success;
-}
-
 
 INT UEyeCamNodelet::parseROSParams (ros::NodeHandle &local_nh)
 {
@@ -1416,62 +1350,59 @@ void UEyeCamNodelet::frameGrabLoop()
             // and stop live video mode if ROS image topic no longer has any subscribers
             //ROS_DEBUG("Number of subscribers; image: %d; rect image: %d;", ros_cam_pub_.getNumSubscribers(), ros_rect_pub_.getNumSubscribers());
 
-            ROS_INFO_STREAM ("Loop Start");
-            if (use_time_synch_ == false)
+            currNumSubscribers = ros_cam_pub_.getNumSubscribers() + ros_rect_pub_.getNumSubscribers();
+            if (currNumSubscribers > 0 && prevNumSubscribers <= 0)
             {
-                currNumSubscribers = ros_cam_pub_.getNumSubscribers() + ros_rect_pub_.getNumSubscribers();
-                if (currNumSubscribers > 0 && prevNumSubscribers <= 0)
-                {
-                    // Reset reference time to prevent throttling first frame
-                    output_rate_mutex_.lock();
-                    init_publish_time_ = ros::Time (0);
-                    prev_output_frame_idx_ = 0;
-                    output_rate_mutex_.unlock();
+                // Reset reference time to prevent throttling first frame
+                output_rate_mutex_.lock();
+                init_publish_time_ = ros::Time (0);
+                prev_output_frame_idx_ = 0;
+                output_rate_mutex_.unlock();
 
-                    if (cam_params_.ext_trigger_mode)
-                    {
-                        if (setExtTriggerMode() != IS_SUCCESS)
-                        {
-                            ERROR_STREAM ("Shutting down driver nodelet for [" << cam_name_ << "]");
-                            ros::shutdown();
-                            return;
-                        }
-                        INFO_STREAM ("[" << cam_name_ << "] set to external trigger mode");
-                    }
-                    else
-                    {
-                        // NOTE: need to copy flash parameters to local copies since
-                        //       cam_params_.flash_duration is type int, and also sizeof(int)
-                        //       may not equal to sizeof(INT) / sizeof(UINT)
-                        INT flash_delay = cam_params_.flash_delay;
-                        UINT flash_duration = cam_params_.flash_duration;
-                        if ((setFreeRunMode() != IS_SUCCESS) ||
-                                (setFlashParams (flash_delay, flash_duration) != IS_SUCCESS))
-                        {
-                            ERROR_STREAM ("Shutting down driver nodelet for [" << cam_name_ << "]");
-                            ros::shutdown();
-                            return;
-                        }
-                        // Copy back actual flash parameter values that were set
-                        cam_params_.flash_delay = flash_delay;
-                        cam_params_.flash_duration = flash_duration;
-                        INFO_STREAM ("[" << cam_name_ << "] set to free-run mode");
-                    }
-                }
-                else if (currNumSubscribers <= 0 && prevNumSubscribers > 0)
+                if (cam_params_.ext_trigger_mode)
                 {
-                    if (setStandbyMode() != IS_SUCCESS)
+                    if (setExtTriggerMode() != IS_SUCCESS)
                     {
                         ERROR_STREAM ("Shutting down driver nodelet for [" << cam_name_ << "]");
                         ros::shutdown();
                         return;
                     }
-                    INFO_STREAM ("[" << cam_name_ << "] set to standby mode");
-                }
-                prevNumSubscribers = currNumSubscribers;
-            }
+                    ROS_INFO_STREAM ("[" << cam_name_ << "] set to external trigger mode");
 
-            ROS_INFO_STREAM ("check config..");
+                }
+                else
+                {
+                    // NOTE: need to copy flash parameters to local copies since
+                    //       cam_params_.flash_duration is type int, and also sizeof(int)
+                    //       may not equal to sizeof(INT) / sizeof(UINT)
+                    INT flash_delay = cam_params_.flash_delay;
+                    UINT flash_duration = cam_params_.flash_duration;
+                    if ((setFreeRunMode() != IS_SUCCESS) ||
+                            (setFlashParams (flash_delay, flash_duration) != IS_SUCCESS))
+                    {
+                        ERROR_STREAM ("Shutting down driver nodelet for [" << cam_name_ << "]");
+                        ros::shutdown();
+                        return;
+                    }
+                    // Copy back actual flash parameter values that were set
+                    cam_params_.flash_delay = flash_delay;
+                    cam_params_.flash_duration = flash_duration;
+                    INFO_STREAM ("[" << cam_name_ << "] set to free-run mode");
+                }
+            }
+            else if (currNumSubscribers <= 0 && prevNumSubscribers > 0)
+            {
+                if (setStandbyMode() != IS_SUCCESS)
+                {
+                    ERROR_STREAM ("Shutting down driver nodelet for [" << cam_name_ << "]");
+                    ros::shutdown();
+                    return;
+                }
+                INFO_STREAM ("[" << cam_name_ << "] set to standby mode");
+            }
+            prevNumSubscribers = currNumSubscribers;
+
+
             // Send updated dyncfg parameters if previously changed
             if (cfg_sync_requested_)
             {
@@ -1482,7 +1413,6 @@ void UEyeCamNodelet::frameGrabLoop()
                     cfg_sync_requested_ = false;
                 }
             }
-            ROS_INFO_STREAM ("check config..DONE");
 
 
 #ifdef DEBUG_PRINTOUT_FRAME_GRAB_RATES
@@ -1495,15 +1425,12 @@ void UEyeCamNodelet::frameGrabLoop()
             }
             prevStartGrab = currStartGrab;
 #endif
-            ROS_INFO_STREAM ("IsCapturing");
             if (isCapturing())
             {
                 INT eventTimeout = (cam_params_.auto_frame_rate || cam_params_.ext_trigger_mode) ?
                                    (INT) 2000 : (INT) (1000.0 / cam_params_.frame_rate * 2);
-                ROS_INFO_STREAM ("Waiting for frame");
                 if (processNextFrame (eventTimeout) != NULL)
                 {
-                    ROS_INFO_STREAM ("Got frame");
                     // Initialize shared pointers from member messages for nodelet intraprocess publishing
 
 
@@ -1596,35 +1523,29 @@ void UEyeCamNodelet::frameGrabLoop()
                     {
 
                         //ROS_INFO_STREAM ("Image Received; seq:" << img_msg_ptr->header.seq);
-                        auto timeStampMsgPtr = findTimeStamp (img_msg_ptr->header.seq);
-                        if (timeStampMsgPtr == NULL)
+                        if (mTimeStampBuffer == NULL)
                         {
-                            ROS_INFO_STREAM ("Image buffered SEQ:" << img_msg_ptr->header.seq);
-                            // buffer for later
-                            mImageBufferMutex.lock();
-                            mImageBuffer.push_back (boost::make_shared<CompletteImage_t> (img_msg_ptr, cam_info_msg_ptr));
-                            mImageBufferMutex.unlock();
+                            ROS_WARN_STREAM ("Image ready but no timestamp ready - dropping image;");
                         }
                         else
                         {
-                            //found match update timestamp and publish
-                            publishImages (img_msg_ptr, cam_info_msg_ptr, timeStampMsgPtr);
+                            publishImages (img_msg_ptr, cam_info_msg_ptr);
                         }
+
 
 
                         double timeDif = img_msg_ptr->header.stamp.toSec() - lastImageTimeStampSec_;
                         //ecpected is interval + 5%
-                        double expectedTime = (1.0 / cam_params_.frame_rate) * 1.05;
+                        double expectedTime = (1.20 / cam_params_.frame_rate);
                         if (timeDif > expectedTime)
                         {
-                            ROS_WARN_STREAM ("Missed image! Time since last frame:" << timeDif << "; expected + 5% :" << expectedTime);
+                            ROS_WARN_STREAM ("Missed image! Time since last frame:" << timeDif << "; expected + 20% :" << expectedTime);
                         }
                         lastImageTimeStampSec_ = img_msg_ptr->header.stamp.toSec();
-                        cleanBuffers ();
                     }
                     else
                     {
-                        publishImages (img_msg_ptr, cam_info_msg_ptr, NULL);
+                        publishImages (img_msg_ptr, cam_info_msg_ptr);
                     }
                     //reset the pointers
                     img_msg_ptr = nullptr;
@@ -1679,66 +1600,6 @@ void UEyeCamNodelet::frameGrabLoop()
     DEBUG_STREAM ("Frame grabber loop terminated for [" << cam_name_ << "]");
 }
 
-
-mavros_msgs::CamIMUStampPtr UEyeCamNodelet::findTimeStamp (int32_t sequence)
-{
-    mavros_msgs::CamIMUStampPtr ptr = NULL;
-    mTimeStampBufferMutex.lock();
-    for (auto it = mTimeStampBuffer.cbegin(); it != mTimeStampBuffer.cend() /* not hoisted */; /* no increment */)
-    {
-
-        if ( (*it)->frame_seq_id == sequence)
-        {
-            ptr = *it;
-            mTimeStampBuffer.erase (it);
-            break;
-        }
-        it++;
-    }
-    mTimeStampBufferMutex.unlock();
-    return ptr;
-}
-
-UEyeCamNodelet::CompletteImagePtr_t UEyeCamNodelet::findImage (uint32_t sequence)
-{
-    CompletteImagePtr_t ptr = NULL;
-    mImageBufferMutex.lock();
-    for (auto it = mImageBuffer.cbegin(); it != mImageBuffer.cend() /* not hoisted */; /* no increment */)
-    {
-        if ((*it)->first->header.seq == sequence)
-        {
-            ptr = *it;
-            mImageBuffer.erase (it);
-            break;
-        }
-        it++;
-    }
-    mImageBufferMutex.unlock();
-    return ptr;
-}
-
-void UEyeCamNodelet::cleanBuffers ()
-{
-    static uint32_t sizeLimit = 5;
-    mImageBufferMutex.lock();
-    if (mImageBuffer.size() > sizeLimit)
-    {
-        auto it = mImageBuffer.begin();
-        mImageBuffer.erase (it);
-        ROS_ERROR_STREAM ("CAM:" << cam_name_ << "; Dropping Stale Imagee; SEQ:" << (*it)->first->header.seq);
-    }
-    mImageBufferMutex.unlock();
-
-    mTimeStampBufferMutex.lock();
-    if (mTimeStampBuffer.size() > sizeLimit)
-    {
-        auto it = mTimeStampBuffer.begin();
-        mTimeStampBuffer.erase (it);
-        ROS_ERROR_STREAM ("CAM:" << cam_name_ << "; Dropping Stale TimeStamp; SEQ:" << (*it)->frame_seq_id);
-    }
-    mTimeStampBufferMutex.unlock();
-
-}
 
 void UEyeCamNodelet::startFrameGrabber()
 {
@@ -1894,41 +1755,29 @@ void UEyeCamNodelet::handleTimeout()
 
 void UEyeCamNodelet::bufferTimestamp (const mavros_msgs::CamIMUStampPtr &timeStampPtr)
 {
-    //TODO: with long enough time this may be a problem if int seq will rollover and become negative.
-    uint32_t seq = static_cast<uint32_t> (timeStampPtr->frame_seq_id);
-    CompletteImagePtr_t imagePtr = findImage (seq);
-
-    if (imagePtr == NULL)
+    if (mTimeStampBuffer == NULL)
     {
-        ROS_INFO_STREAM ("Timestamp buffered SEQ:" << seq);
-        mTimeStampBufferMutex.lock();
-        mTimeStampBuffer.push_back (timeStampPtr);
-        mTimeStampBufferMutex.unlock();
+        mTimeStampBuffer = timeStampPtr;
+        //ROS_INFO_STREAM ("TIME STAMP arrived SEQ:" << timeStampPtr->frame_seq_id);
     }
     else
     {
-        publishImages (imagePtr->first, imagePtr->second, timeStampPtr);
+        ROS_WARN_STREAM ("LAST times stamp was not cleared");
     }
 
-    //detect missing timestamp
-    if (seq != mNextTsSeq_)
-    {
-        ROS_WARN_STREAM ("MISSED timestamps!");
-    }
-    mNextTsSeq_ = seq + 1;
-    cleanBuffers ();
 }
 
 
-void UEyeCamNodelet::publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr, mavros_msgs::CamIMUStampPtr timeStampPtr)
+void UEyeCamNodelet::publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr)
 {
-    if (timeStampPtr != NULL)
+    if (mTimeStampBuffer != NULL)
     {
-        imgPtr->header.stamp.sec = infoPtr->header.stamp.sec = timeStampPtr->frame_stamp.sec;
-        imgPtr->header.stamp.nsec = infoPtr->header.stamp.nsec = timeStampPtr->frame_stamp.nsec;
+        imgPtr->header.stamp.sec = infoPtr->header.stamp.sec = mTimeStampBuffer->frame_stamp.sec;
+        imgPtr->header.stamp.nsec = infoPtr->header.stamp.nsec = mTimeStampBuffer->frame_stamp.nsec;
+        mTimeStampBuffer = NULL;
     }
 
-    ROS_INFO_STREAM ("Publishing image seq:" << infoPtr->header.seq);
+    //ROS_INFO_STREAM ("Publishing image seq:" << infoPtr->header.seq);
 
     if (ros_cam_pub_.getNumSubscribers() > 0)
     {
@@ -2078,7 +1927,41 @@ void UEyeCamNodelet::optimizeCaptureParams (sensor_msgs::ImagePtr imgPtr)
     }
 }
 
+bool UEyeCamNodelet::sendCameraTriggerControl (bool enable)
+{
+    bool result = false;
 
+    mavros_msgs::CommandTriggerControl mCameraTriggerCall;
+
+    //Due to changes in PX4/mavling (no mavros yet) trigger control the cycle_time is mapped to "reset sequence"!!! F!
+    //mCameraTriggerCall.request.cycle_time = static_cast<float> (enable ? (1000.0 / mFrameRate) : 0.0);
+    mCameraTriggerCall.request.cycle_time = enable ? 1 : 0;
+    mCameraTriggerCall.request.trigger_enable = enable;
+    ROS_INFO ("Calling trigger control service: trigger_enable=%s; cycle_time=%f[ms]",
+              (enable ? "true" : "false"),
+              static_cast<double> (mCameraTriggerCall.request.cycle_time));
+
+    result = mCameraTriggerControlClient.call (mCameraTriggerCall);
+
+    if (result == true)
+    {
+        ROS_INFO ("Successfully enabled camera trigger");
+        return true;
+    }
+    else
+    {
+        if (mIgnoreCameraTriggerResponse)
+        {
+            ROS_INFO ("Failed to call trigger_control service - ignoring");
+            return true;
+        }
+        else
+        {
+            ROS_ERROR ("Failed to call trigger_control service");
+            return false;
+        }
+    }
+}
 
 
 

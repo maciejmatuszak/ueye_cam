@@ -105,6 +105,7 @@ public:
     const static bool         DEFAULT_TRIGGER_CONTROL_SRV_IGNORE_RESP;
 
 
+
     UEyeCamNodelet();
 
     virtual ~UEyeCamNodelet();
@@ -207,7 +208,7 @@ protected:
      * @param containerptr
      */
     void bufferTimestamp (const mavros_msgs::CamIMUStampPtr &msg);
-    void publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr, mavros_msgs::CamIMUStampPtr timeStampPtr);
+    void publishImages (sensor_msgs::ImagePtr imgPtr, sensor_msgs::CameraInfoPtr infoPtr);
 
     void optimizeCaptureParams (sensor_msgs::ImagePtr imgPtr);
 
@@ -247,13 +248,7 @@ protected:
     //CV copy of the image message shared between rectification and adaptive exposure time algorithms
     sensor_msgs::CameraInfoPtr cam_info_msg_ptr_;
 
-    typedef std::pair<sensor_msgs::ImagePtr, sensor_msgs::CameraInfoPtr> CompletteImage_t;
-    typedef boost::shared_ptr<CompletteImage_t> CompletteImagePtr_t;
-    std::vector<CompletteImagePtr_t> mImageBuffer;
-    std::vector<mavros_msgs::CamIMUStampPtr> mTimeStampBuffer;
-
-    boost::mutex mImageBufferMutex;
-    boost::mutex mTimeStampBufferMutex;
+    mavros_msgs::CamIMUStampPtr mTimeStampBuffer;
 
     unsigned int imageSeq_;
     ros::Publisher timeout_pub_;
@@ -285,17 +280,12 @@ protected:
     bool use_time_synch_;
     double lastImageTimeStampSec_;
 
-    uint32_t mNextTsSeq_;
-    ros::ServiceServer cameraControlServer_;
 
     PID ocv_auto_exposure_pid_;
-
-    bool cameraControl (ueye_cam::CameraControlRequest &reqPtr, ueye_cam::CameraControlResponse &respPtr);
 private:
-    mavros_msgs::CamIMUStampPtr  findTimeStamp (int32_t sequence);
-    UEyeCamNodelet::CompletteImagePtr_t findImage (uint32_t sequence);
-
-    void cleanBuffers ();
+    bool                               mIgnoreCameraTriggerResponse;
+    ros::ServiceClient                 mCameraTriggerControlClient;
+    bool sendCameraTriggerControl (bool enable);
 };
 
 
