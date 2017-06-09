@@ -1762,7 +1762,11 @@ void UEyeCamNodelet::bufferTimestamp (const mavros_msgs::CamIMUStampPtr &timeSta
     }
     else
     {
-        ROS_WARN_STREAM ("LAST times stamp was not cleared");
+        //if we have subscribers then we should be clearing the timestamp
+        if((ros_cam_pub_.getNumSubscribers() > 0) || (ros_rect_pub_.getNumSubscribers() > 0))
+        {
+            ROS_WARN_STREAM ("LAST times stamp was not cleared");
+        }
     }
 
 }
