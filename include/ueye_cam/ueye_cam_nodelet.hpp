@@ -48,7 +48,7 @@
 #ifndef UEYE_CAM_NODELET_HPP_
 #define UEYE_CAM_NODELET_HPP_
 
-
+#include <boost/thread.hpp>
 #include <nodelet/nodelet.h>
 #include <dynamic_reconfigure/server.h>
 #include <image_transport/image_transport.h>
@@ -105,6 +105,8 @@ public:
 
 
 protected:
+
+  void readTimeStampsThread();
   /**
    * Calls UEyeCamDriver::syncCamConfig(), then updates ROS camera info
    * and ROS image settings.
@@ -208,6 +210,9 @@ protected:
   ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
   uint64_t prev_output_frame_idx_; // see init_publish_time_
   boost::mutex output_rate_mutex_;
+  bool use_hard_sync_;
+  bool readTimeStampsThreadRunning_;
+  boost::shared_ptr<boost::thread> readTimeStampsThread_;
 };
 
 

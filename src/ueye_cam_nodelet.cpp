@@ -52,7 +52,7 @@
 #include <std_msgs/UInt64.h>
 #include <sensor_msgs/fill_image.h>
 #include <sensor_msgs/image_encodings.h>
-
+#include <itq_ts_access/itq_ts_access.h>
 
 //#define DEBUG_PRINTOUT_FRAME_GRAB_RATES
 
@@ -87,7 +87,11 @@ UEyeCamNodelet::UEyeCamNodelet():
     cam_params_filename_(""),
     init_clock_tick_(0),
     init_publish_time_(0),
-    prev_output_frame_idx_(0) {
+    prev_output_frame_idx_(0),
+    use_hard_sync_(false),
+    readTimeStampsThreadRunning_(false),
+    readTimeStampsThread_(NULL)
+{
   ros_image_.is_bigendian = (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__); // TODO: what about MS Windows?
   cam_params_.image_width = DEFAULT_IMAGE_WIDTH;
   cam_params_.image_height = DEFAULT_IMAGE_HEIGHT;
@@ -123,6 +127,12 @@ UEyeCamNodelet::UEyeCamNodelet():
 UEyeCamNodelet::~UEyeCamNodelet() {
   disconnectCam();
 
+  if(readTimeStampsThread_)
+  {
+      readTimeStampsThreadRunning_ = false;
+      readTimeStampsThread_->join();
+  }
+
   // NOTE: sometimes deleting dynamic reconfigure object will lock up
   //       (suspect the scoped lock is not releasing the recursive mutex)
   //
@@ -145,6 +155,7 @@ void UEyeCamNodelet::onInit() {
   local_nh.param<string>("timeout_topic", timeout_topic_, DEFAULT_TIMEOUT_TOPIC);
   local_nh.param<string>("camera_intrinsics_file", cam_intr_filename_, "");
   local_nh.param<int>("camera_id", cam_id_, ANY_CAMERA);
+  local_nh.param<bool>("use_hard_sync", use_hard_sync_, use_hard_sync_);
   local_nh.param<string>("camera_parameters_file", cam_params_filename_, "");
   if (cam_id_ < 0) {
     WARN_STREAM("Invalid camera ID specified: " << cam_id_ <<
@@ -171,6 +182,12 @@ void UEyeCamNodelet::onInit() {
     ERROR_STREAM("Failed to initialize [" << cam_name_ << "]");
     return;
   }
+
+  if(use_hard_sync_)
+  {
+      readTimeStampsThread_ = boost::make_shared<boost::thread>(&UEyeCamNodelet::readTimeStampsThread, this);
+  }
+
 
   ros_cfg_->setCallback(f); // this will call configCallback, which will configure the camera's parameters
   startFrameGrabber();
@@ -677,6 +694,16 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
   }
 
   DEBUG_STREAM("Successfully applied settings from dyncfg to [" << cam_name_ << "]");
+}
+
+void UEyeCamNodelet::readTimeStampsThread()
+{
+    readTimeStampsThreadRunning_ = true;
+    while (ros::ok() && readTimeStampsThreadRunning_)
+    {
+
+    }
+
 }
 
 

@@ -26,6 +26,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   camera_calibration_parsers
   camera_info_manager
+  irq_ts_access
   )
 catkin_destinations() # define ${CATKIN_PACKAGE_SHARE_DESTINATION}
 
@@ -76,7 +77,7 @@ generate_dynamic_reconfigure_options(
 catkin_package(
   INCLUDE_DIRS include
   LIBRARIES ${UEYECAM_LIB_NAME} ${UEYECAM_NODELET_NAME}
-  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure image_transport sensor_msgs camera_calibration_parsers camera_info_manager
+  CATKIN_DEPENDS roscpp nodelet dynamic_reconfigure image_transport sensor_msgs camera_calibration_parsers camera_info_manager irq_ts_access
   )
 
 include_directories(
