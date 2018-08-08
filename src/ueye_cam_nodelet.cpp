@@ -188,7 +188,13 @@ void UEyeCamNodelet::onInit() {
     try
     {
 
+        INFO_STREAM("Dev opening...");
       irqTsAccess_->Open();
+      INFO_STREAM("Dev opening...DONE");
+
+      INFO_STREAM("Dev add Pin...");
+      int ret = irqTsAccess_->AddPin(0, 314, irq_ts_access::IRQ_TS_EDGE_RISING, "PIN314");
+      INFO_STREAM("Dev add Pin...DONE; ret:" << ret );
     }
     catch (invalid_argument &e)
     {
@@ -721,14 +727,22 @@ void UEyeCamNodelet::readTimeStampsThread()
     while (ros::ok() && readTimeStampsThreadRunning_)
     {
         INFO_STREAM("UEyeCamNodelet::readTimeStampsThread Read...");
-        if(irqTsAccess_->Read(timeStamps))
+        int readRet = irqTsAccess_->Read(timeStamps);
+        if(readRet > 0)
         {
             for(auto ts: timeStamps)
             {
-                ros::Time rt(ts.sec, ts.nsec);
-                INFO_STREAM("UEyeCamNodelet::readTimeStampsThread TS: " << rt);
+                if(ts.has_time)
+                {
+                    ros::Time rt(ts.sec, ts.nsec);
+                    INFO_STREAM("UEyeCamNodelet::readTimeStampsThread TS: " << rt);
+                }
             }
 
+        }
+        else if(readRet == 0)
+        {
+            ERROR_STREAM("UEyeCamNodelet::readTimeStampsThread Read.. timeout!");
         }
         else
         {
