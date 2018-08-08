@@ -58,6 +58,7 @@
 #include <ueye_cam/UEyeCamConfig.h>
 #include <boost/thread/mutex.hpp>
 #include <ueye_cam/ueye_cam_driver.hpp>
+#include <irq_ts_access/irq_ts_access.h>
 
 
 namespace ueye_cam {
@@ -213,6 +214,8 @@ protected:
   bool use_hard_sync_;
   bool readTimeStampsThreadRunning_;
   boost::shared_ptr<boost::thread> readTimeStampsThread_;
+  boost::shared_ptr<irq_ts_access::IrqTsAccess> irqTsAccess_;
+
 };
 
 

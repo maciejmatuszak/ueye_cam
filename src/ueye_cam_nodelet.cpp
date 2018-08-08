@@ -52,7 +52,6 @@
 #include <std_msgs/UInt64.h>
 #include <sensor_msgs/fill_image.h>
 #include <sensor_msgs/image_encodings.h>
-#include <itq_ts_access/itq_ts_access.h>
 
 //#define DEBUG_PRINTOUT_FRAME_GRAB_RATES
 
@@ -185,7 +184,24 @@ void UEyeCamNodelet::onInit() {
 
   if(use_hard_sync_)
   {
-      readTimeStampsThread_ = boost::make_shared<boost::thread>(&UEyeCamNodelet::readTimeStampsThread, this);
+    irqTsAccess_ = boost::make_shared<irq_ts_access::IrqTsAccess>("/dev/irq_ts");
+    try
+    {
+
+      irqTsAccess_->Open();
+    }
+    catch (invalid_argument &e)
+    {
+          ERROR_STREAM("UEyeCamNodelet::onInit: Unable to open irq_ts device:" << e.what());
+          throw;
+    }
+
+    INFO_STREAM("UEyeCamNodelet::onInit:: starting hard_sync thread");
+    readTimeStampsThread_ = boost::make_shared<boost::thread>(&UEyeCamNodelet::readTimeStampsThread, this);
+  }
+  else
+  {
+      INFO_STREAM("UEyeCamNodelet::onInit:: not using hard_sync");
   }
 
 
@@ -699,9 +715,26 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
 void UEyeCamNodelet::readTimeStampsThread()
 {
     readTimeStampsThreadRunning_ = true;
+    INFO_STREAM("UEyeCamNodelet::readTimeStampsThread started");
+
+    std::vector<irq_ts_access::IrqTsAccess::IrqTsAccessTimestamp_t> timeStamps;
     while (ros::ok() && readTimeStampsThreadRunning_)
     {
+        INFO_STREAM("UEyeCamNodelet::readTimeStampsThread Read...");
+        if(irqTsAccess_->Read(timeStamps))
+        {
+            for(auto ts: timeStamps)
+            {
+                ros::Time rt(ts.sec, ts.nsec);
+                INFO_STREAM("UEyeCamNodelet::readTimeStampsThread TS: " << rt);
+            }
 
+        }
+        else
+        {
+            ERROR_STREAM("UEyeCamNodelet::readTimeStampsThread Read.. failed!");
+        }
+        INFO_STREAM("UEyeCamNodelet::readTimeStampsThread Read...DONE");
     }
 
 }

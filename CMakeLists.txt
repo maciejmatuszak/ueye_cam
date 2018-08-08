@@ -28,6 +28,8 @@ find_package(catkin REQUIRED COMPONENTS
   camera_info_manager
   irq_ts_access
   )
+
+
 catkin_destinations() # define ${CATKIN_PACKAGE_SHARE_DESTINATION}
 
 #set(UEYE_LIBRARY_PATH /usr/lib)
@@ -82,6 +84,7 @@ catkin_package(
 
 include_directories(
   include
+  ${irq_ts_access_INCLUDE_DIRS}
   ${catkin_INCLUDE_DIRS}
   ${UEYE_INCLUDE_DIR}
   )
