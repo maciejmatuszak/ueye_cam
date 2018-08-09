@@ -198,7 +198,8 @@ void UEyeCamNodelet::onInit() {
       INFO_STREAM("Dev opening...DONE");
 
       INFO_STREAM("Dev add Pin...");
-      int ret = irqTsAccess_->AddPin(0, hard_sync_pin_, irq_ts_access::IRQ_TS_EDGE_RISING, "PIN_" + hard_sync_pin_);
+
+      int ret = irqTsAccess_->AddPin(0, hard_sync_pin_, irq_ts_access::IRQ_TS_EDGE_RISING, "PIN_"  + to_string(hard_sync_pin_));
       INFO_STREAM("Dev add Pin...DONE; ret:" << ret );
     }
     catch (invalid_argument &e)
@@ -729,29 +730,31 @@ void UEyeCamNodelet::readTimeStampsThread()
     INFO_STREAM("UEyeCamNodelet::readTimeStampsThread started");
     uint32_t seq = 0;
 
-    std::vector<irq_ts_access::IrqTsAccess::IrqTsAccessTimestamp_t> timeStamps;
+    std::vector<boost::shared_ptr<irq_ts_access::IrqTsAccess::IrqTsAccessTimestamp_t>> timeStamps;
     while (ros::ok() && readTimeStampsThreadRunning_)
     {
-        INFO_STREAM("UEyeCamNodelet::readTimeStampsThread Read...");
+        //INFO_STREAM("UEyeCamNodelet::readTimeStampsThread Read...");
+        timeStamps.clear();
         int readRet = irqTsAccess_->Read(timeStamps);
         if(readRet > 0)
         {
             for(auto ts: timeStamps)
             {
-                if(ts.has_time && ts.entry_id == 0)
+                if(ts->has_time && ts->entry_id == 0)
                 {
-                    if(seq != ts.seq)
+                    if(seq != ts->seq)
                     {
-                        WARN_STREAM("UEyeCamNodelet::readTimeStampsThread out of sequence; delta: " << (ts.seq - seq));
-                        seq = ts.seq;
+                        WARN_STREAM("UEyeCamNodelet::readTimeStampsThread out of sequence; delta: " << (ts->seq - seq));
+                        seq = ts->seq;
                     }
-                    seq++;
+                    ++seq;
 
                     hard_sync_mutex_.lock();
-                    hard_sync_last_ts_sec = ts.sec;
-                    hard_sync_last_ts_nsec = ts.nsec;
+                    hard_sync_last_ts_sec = ts->sec;
+                    hard_sync_last_ts_nsec = ts->nsec;
                     hard_sync_mutex_.unlock();
-                    INFO_STREAM("UEyeCamNodelet::readTimeStampsThread TS: " << hard_sync_last_ts_sec);
+                    INFO_STREAM("SEQ:" << ts->seq);
+                    //INFO_STREAM("UEyeCamNodelet::readTimeStampsThread TS: " << hard_sync_last_ts_sec);
                 }
             }
         }
@@ -763,7 +766,7 @@ void UEyeCamNodelet::readTimeStampsThread()
         {
             ERROR_STREAM("UEyeCamNodelet::readTimeStampsThread Read.. failed!");
         }
-        INFO_STREAM("UEyeCamNodelet::readTimeStampsThread Read...DONE");
+        //INFO_STREAM("UEyeCamNodelet::readTimeStampsThread Read...DONE");
     }
 
 }
