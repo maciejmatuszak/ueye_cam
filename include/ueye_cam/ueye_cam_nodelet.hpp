@@ -107,7 +107,6 @@ public:
 
 protected:
 
-  void readTimeStampsThread();
   /**
    * Calls UEyeCamDriver::syncCamConfig(), then updates ROS camera info
    * and ROS image settings.
@@ -211,14 +210,10 @@ protected:
   ros::Time init_publish_time_; // for throttling frames from being published (see cfg.output_rate)
   uint64_t prev_output_frame_idx_; // see init_publish_time_
   boost::mutex output_rate_mutex_;
+
   bool use_hard_sync_;
-  uint32_t hard_sync_pin_;
-  uint32_t hard_sync_last_ts_sec;
-  uint32_t hard_sync_last_ts_nsec;
-  boost::mutex hard_sync_mutex_;
-  bool readTimeStampsThreadRunning_;
-  boost::shared_ptr<boost::thread> readTimeStampsThread_;
   boost::shared_ptr<irq_ts_access::IrqTsAccess> irqTsAccess_;
+  uint32_t irqTsSequence;
 
 };
 

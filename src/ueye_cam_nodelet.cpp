@@ -87,10 +87,7 @@ UEyeCamNodelet::UEyeCamNodelet():
     init_clock_tick_(0),
     init_publish_time_(0),
     prev_output_frame_idx_(0),
-    use_hard_sync_(false),
-    hard_sync_pin_(314),
-    readTimeStampsThreadRunning_(false),
-    readTimeStampsThread_(NULL)
+    use_hard_sync_(false)
 {
   ros_image_.is_bigendian = (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__); // TODO: what about MS Windows?
   cam_params_.image_width = DEFAULT_IMAGE_WIDTH;
@@ -127,10 +124,9 @@ UEyeCamNodelet::UEyeCamNodelet():
 UEyeCamNodelet::~UEyeCamNodelet() {
   disconnectCam();
 
-  if(readTimeStampsThread_)
+  if(irqTsAccess_)
   {
-      readTimeStampsThreadRunning_ = false;
-      readTimeStampsThread_->join();
+      irqTsAccess_->Close();
   }
 
   // NOTE: sometimes deleting dynamic reconfigure object will lock up
@@ -148,7 +144,6 @@ void UEyeCamNodelet::onInit() {
   ros::NodeHandle& local_nh = getPrivateNodeHandle();
   image_transport::ImageTransport it(nh);
 
-  int temp;
   // Load camera-agnostic ROS parameters
   local_nh.param<string>("camera_name", cam_name_, DEFAULT_CAMERA_NAME);
   local_nh.param<string>("frame_name", frame_name_, DEFAULT_FRAME_NAME);
@@ -157,9 +152,6 @@ void UEyeCamNodelet::onInit() {
   local_nh.param<string>("camera_intrinsics_file", cam_intr_filename_, "");
   local_nh.param<int>("camera_id", cam_id_, ANY_CAMERA);
   local_nh.param<bool>("use_hard_sync", use_hard_sync_, use_hard_sync_);
-  temp = hard_sync_pin_;
-  local_nh.param<int>("hard_sync_pin", temp, temp);
-  hard_sync_pin_ = temp;
   local_nh.param<string>("camera_parameters_file", cam_params_filename_, "");
   if (cam_id_ < 0) {
     WARN_STREAM("Invalid camera ID specified: " << cam_id_ <<
@@ -192,24 +184,16 @@ void UEyeCamNodelet::onInit() {
     irqTsAccess_ = boost::make_shared<irq_ts_access::IrqTsAccess>("/dev/irq_ts");
     try
     {
-
-        INFO_STREAM("Dev opening...");
       irqTsAccess_->Open();
-      INFO_STREAM("Dev opening...DONE");
-
-      INFO_STREAM("Dev add Pin...");
-
-      int ret = irqTsAccess_->AddPin(0, hard_sync_pin_, irq_ts_access::IRQ_TS_EDGE_RISING, "PIN_"  + to_string(hard_sync_pin_));
-      INFO_STREAM("Dev add Pin...DONE; ret:" << ret );
+      irqTsAccess_->AddPin(0, 314, true, "PIN_314");
     }
     catch (invalid_argument &e)
     {
           ERROR_STREAM("UEyeCamNodelet::onInit: Unable to open irq_ts device:" << e.what());
           throw;
     }
+    INFO_STREAM("UEyeCamNodelet::onInit:: irqTsAccess_ initialised");
 
-    INFO_STREAM("UEyeCamNodelet::onInit:: starting hard_sync thread");
-    readTimeStampsThread_ = boost::make_shared<boost::thread>(&UEyeCamNodelet::readTimeStampsThread, this);
   }
   else
   {
@@ -724,53 +708,6 @@ void UEyeCamNodelet::configCallback(ueye_cam::UEyeCamConfig& config, uint32_t le
   DEBUG_STREAM("Successfully applied settings from dyncfg to [" << cam_name_ << "]");
 }
 
-void UEyeCamNodelet::readTimeStampsThread()
-{
-    readTimeStampsThreadRunning_ = true;
-    INFO_STREAM("UEyeCamNodelet::readTimeStampsThread started");
-    uint32_t seq = 0;
-
-    std::vector<boost::shared_ptr<irq_ts_access::IrqTsAccess::IrqTsAccessTimestamp_t>> timeStamps;
-    while (ros::ok() && readTimeStampsThreadRunning_)
-    {
-        //INFO_STREAM("UEyeCamNodelet::readTimeStampsThread Read...");
-        timeStamps.clear();
-        int readRet = irqTsAccess_->Read(timeStamps);
-        if(readRet > 0)
-        {
-            for(auto ts: timeStamps)
-            {
-                if(ts->has_time && ts->entry_id == 0)
-                {
-                    if(seq != ts->seq)
-                    {
-                        WARN_STREAM("UEyeCamNodelet::readTimeStampsThread out of sequence; delta: " << (ts->seq - seq));
-                        seq = ts->seq;
-                    }
-                    ++seq;
-
-                    hard_sync_mutex_.lock();
-                    hard_sync_last_ts_sec = ts->sec;
-                    hard_sync_last_ts_nsec = ts->nsec;
-                    hard_sync_mutex_.unlock();
-                    INFO_STREAM("SEQ:" << ts->seq);
-                    //INFO_STREAM("UEyeCamNodelet::readTimeStampsThread TS: " << hard_sync_last_ts_sec);
-                }
-            }
-        }
-        else if(readRet == 0)
-        {
-            ERROR_STREAM("UEyeCamNodelet::readTimeStampsThread Read.. timeout!");
-        }
-        else
-        {
-            ERROR_STREAM("UEyeCamNodelet::readTimeStampsThread Read.. failed!");
-        }
-        //INFO_STREAM("UEyeCamNodelet::readTimeStampsThread Read...DONE");
-    }
-
-}
-
 
 INT UEyeCamNodelet::syncCamConfig(string dft_mode_str) {
   INT is_err;
@@ -1274,10 +1211,26 @@ ros::Time UEyeCamNodelet::getImageTickTimestamp() {
   uint64_t tick;
   if(use_hard_sync_)
   {
-      hard_sync_mutex_.lock();
-      ros::Time ts(hard_sync_last_ts_sec, hard_sync_last_ts_nsec);
-      hard_sync_mutex_.unlock();
-      return ts;
+      uint32_t seq;
+      long sec,nsec;
+      if(irqTsAccess_->Read(0, &sec, &nsec, &seq))
+      {
+          if(irqTsSequence == seq)
+          {
+              irqTsSequence++;
+          }
+          else
+          {
+              WARN("getImageTickTimestamp: skipped %d sequences", (seq - irqTsSequence));
+              irqTsSequence = seq + 1;
+          }
+          return ros::Time(sec, nsec);
+      }
+      else
+      {
+          ERROR("getImageTickTimestamp: unable to read timestamp from irq_ts");
+      }
+      return ros::Time::now();
   }
   else
   {
